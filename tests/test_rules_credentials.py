@@ -35,6 +35,7 @@ def test_rule_hits(rule_id, cmd):
     ("C002", "cat readme.md"),
     ("C003", "ls ~/.config"),
     ("C004", "pass ls"),
+    ("C005", "sqlite3 main.db"),
     ("C006", "conda env create"),
     ("C006", "python -m venv env"),
 ])
