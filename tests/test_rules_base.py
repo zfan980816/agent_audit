@@ -29,6 +29,17 @@ def test_regex_rule_case_insensitive():
     assert DemoRule().check(shell("RM -RF /tmp/x")) is not None
 
 
+def test_empty_pattern_rejected_loudly():
+    import pytest
+
+    class ForgetfulRule(RegexRule):
+        id = "X002"
+        title = "forgot pattern"
+
+    with pytest.raises(ValueError, match="pattern is empty"):
+        ForgetfulRule()
+
+
 def test_evidence_of_variants():
     from tests.conftest import fwrite, netreq
     assert evidence_of(shell("cmd")) == "cmd"

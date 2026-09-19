@@ -22,6 +22,7 @@ def evidence_of(event: Event) -> str:
     if isinstance(event, ShellCommand):
         return event.raw
     if isinstance(event, FileWrite):
+        # path only — to match written content, write a custom Rule.check()
         return event.path
     if isinstance(event, NetworkRequest):
         return event.url
@@ -48,6 +49,8 @@ class RegexRule(Rule):
     pattern: str = ""
 
     def __init__(self) -> None:
+        if not self.pattern:
+            raise ValueError(f"{type(self).__name__}.pattern is empty")
         self._re = re.compile(self.pattern, re.IGNORECASE)
 
     def check(self, event: Event) -> Finding | None:
