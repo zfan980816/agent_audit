@@ -36,3 +36,9 @@ def test_file_write_defaults():
                    path="/x/.bashrc")
     assert ev.is_config is True
     assert ev.content is None
+
+
+def test_file_write_explicit_false_respected():
+    ev = FileWrite(session_id="s1", project="demo", timestamp=None,
+                   path="/x/.bashrc", is_config=False)
+    assert ev.is_config is False

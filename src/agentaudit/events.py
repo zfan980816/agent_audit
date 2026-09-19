@@ -61,13 +61,11 @@ class ShellCommand(Event):
 @dataclass
 class FileWrite(Event):
     path: str = ""
-    is_config: bool = False
+    is_config: bool | None = None  # None = auto-detect from path
     content: str | None = None
 
     def __post_init__(self) -> None:
-        # auto-detect config paths unless the caller explicitly marked it True
-        # (plan Task 2 test_file_write_defaults requires this derivation)
-        if not self.is_config:
+        if self.is_config is None:
             self.is_config = is_config_path(self.path)
 
 
