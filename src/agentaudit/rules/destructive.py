@@ -11,10 +11,20 @@ class D001(RegexRule):
     title = "Recursive force delete"
     explanation = "Recursive force deletion can wipe entire directory trees beyond recovery."
     recommendation = "Confirm the deleted path scope; restore from VCS/backup if unintended."
+    # NOTE: "rm" intentionally has no leading \b so compound commands like
+    # "git rm -rf" still hit.
     pattern = (
-        r"rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b"
+        # flag cluster containing both r and f (no trailing \b: -rfi etc. still hit)
+        r"rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"
+        # separated flags: rm -r ... -f (either order), long flags included
+        r"|rm\b[^|;&\n]*\s-r[a-zA-Z]*\b[^|;&\n]*\s-f[a-zA-Z]*\b"
+        r"|rm\b[^|;&\n]*\s-f[a-zA-Z]*\b[^|;&\n]*\s-r[a-zA-Z]*\b"
+        r"|rm\b[^|;&\n]*--recursive\b[^|;&\n]*--force\b"
+        r"|rm\b[^|;&\n]*--force\b[^|;&\n]*--recursive\b"
         r"|\brd\s+/s\s+/q\b"
-        r"|\bdel\s+(/q\s+/s\b|/s\s+/q\b)"
+        # /s and /q anywhere in the del command (any flag order/prefix)
+        r"|\bdel\b[^|;&\n]*/s\b[^|;&\n]*/q\b"
+        r"|\bdel\b[^|;&\n]*/q\b[^|;&\n]*/s\b"
         r"|Remove-Item\b[^|;&\n]*-Recurse\b[^|;&\n]*-Force"
         r"|Remove-Item\b[^|;&\n]*-Force\b[^|;&\n]*-Recurse"
     )
@@ -29,7 +39,7 @@ class D002(RegexRule):
     pattern = (
         r"git\s+reset\s+--hard\b"
         r"|git\s+clean\s+-\w*f"
-        r"|git\s+push\b[^|;&\n]*(--force\b|--force-with-lease\b|\s-f\b)"
+        r"|git\s+push\b[^|;&\n]*(\s--force\b|\s--force-with-lease\b|\s-[a-z]*f[a-z]*\b)"
         r"|git\s+reflog\s+expire\b"
     )
 
@@ -40,7 +50,7 @@ class D003(RegexRule):
     title = "World-writable permissions (chmod 777)"
     explanation = "chmod 777 makes files writable by every user on the machine."
     recommendation = "Use the narrowest permission set that works."
-    pattern = r"chmod\s+(-R\s+)?777\b"
+    pattern = r"chmod\s+(-R\s+)?0?777\b"
 
 
 class D004(RegexRule):
@@ -53,7 +63,7 @@ class D004(RegexRule):
         r"\bdd\b[^|;&\n]*of=/dev/\w+"
         r"|\bmkfs(\.\w+)?\b"
         r"|diskutil\s+erase\w*"
-        r"|\bformat\s+[a-zA-Z]:(\s|$)"
+        r"|\bformat\s+[a-zA-Z]:(\s|$|;)"
     )
 
 
@@ -64,7 +74,7 @@ class D005(RegexRule):
     explanation = "Pruning all docker resources or killing system processes can take down unrelated services."
     recommendation = "Scope the operation to named resources only."
     pattern = (
-        r"docker\s+system\s+prune\b[^|;&\n]*(--volumes|--all|\s-a\b)"
+        r"docker\s+system\s+prune\b[^|;&\n]*(\s--volumes\b|\s--all\b|\s-[a-z]*a[a-z]*\b)"
         r"|killall\s+\w+"
         r"|taskkill\b[^|;&\n]*\s/im\b[^|;&\n]*(explorer|svchost|csrss|wininit)"
     )
