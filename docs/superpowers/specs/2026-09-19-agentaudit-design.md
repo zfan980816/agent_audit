@@ -185,8 +185,8 @@ agentaudit --demo             # 用内置合成数据演示（无需装过 Claud
 5. 提交 awesome-claude-code 等清单
 
 **路线图**：
-- v0.1（第 1-2 周）：MVP（§4）
-- v0.2（第 3-4 周）：Codex/Gemini CLI 解析器、SARIF 导出、share card、`--demo`
+- v0.1（第 1-2 周）：MVP（§4）+ `--demo` + share card 输出（发布传播依赖这两项）
+- v0.2（第 3-4 周）：Codex/Gemini CLI 解析器、SARIF 导出
 - v0.3（第 5-6 周）：拦截模式（PreToolUse hook 策略引擎，audit → guard 闭环）
 - 之后按 issue 反馈迭代
 
