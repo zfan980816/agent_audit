@@ -16,7 +16,8 @@ class B001(Rule):
     applies_to = (FileWrite,)
 
     _name_re = re.compile(r"^settings(\.local)?\.json$", re.IGNORECASE)
-    _danger_re = re.compile(r'"allow"\s*:\s*\[[^\]]*"(Bash|Edit|Write|WebFetch|\*)', re.IGNORECASE)
+    # middle spans capped {0,2000}: adversarial repeated anchors stay linear (ReDoS hardening)
+    _danger_re = re.compile(r'"allow"\s*:\s*\[[^\]]{0,2000}"(Bash|Edit|Write|WebFetch|\*)', re.IGNORECASE)
 
     def check(self, event: Event) -> Finding | None:
         if not isinstance(event, FileWrite):
@@ -40,7 +41,7 @@ class B002(Rule):
 
     _shell_re = re.compile(
         r"--dangerously-skip-permissions|--yolo\b"
-        r"|claude\s+config\s+set\b[^|;&\n]*(bypassPermissions|allowedTools)", re.IGNORECASE)
+        r"|claude\s+config\s+set\b[^|;&\n]{0,400}(bypassPermissions|allowedTools)", re.IGNORECASE)
     _file_re = re.compile(
         r'"defaultMode"\s*:\s*"bypassPermissions"|"hooks"\s*:\s*\{\s*\}', re.IGNORECASE)
 
@@ -119,7 +120,7 @@ class B004(Rule):
         r"|systemctl\s+(enable|start)\b"
         r"|launchctl\s+(load|bootstrap)\b"
         r"|schtasks\s+/create\b"
-        r"|reg\s+add\b[^|;&\n]*\\(Run|RunOnce)\b"
+        r"|reg\s+add\b[^|;&\n]{0,400}\\(Run|RunOnce)\b"
         r"|\bsc\s+create\b", re.IGNORECASE)
     _file_re = re.compile(r"LaunchAgents|/etc/cron\.|systemd/system", re.IGNORECASE)
 
@@ -153,7 +154,7 @@ class B005(Rule):
     # `tee -a ~/.ssh/authorized_keys`.
     _shell_re = re.compile(
         r"(>>?|tee\s+-a)\s*[\w./\\~-]*authorized_keys"
-        r"|ssh-keygen[^|;&\n]*\|\s*(tee|cat)\b", re.IGNORECASE)
+        r"|ssh-keygen[^|;&\n]{0,400}\|\s*(tee|cat)\b", re.IGNORECASE)
 
     def check(self, event: Event) -> Finding | None:
         if isinstance(event, ShellCommand):
@@ -178,7 +179,7 @@ class B006(RegexRule):
     title = "Privilege escalation via sudo"
     explanation = "Commands ran as root; blast radius of any mistake or injection is the whole machine."
     recommendation = "Check each sudo invocation was justified."
-    pattern = r"(^|[\s;&|(])sudo\s|Start-Process\b[^|;&\n]*-Verb\s+RunAs"
+    pattern = r"(^|[\s;&|(])sudo\s|Start-Process\b[^|;&\n]{0,400}-Verb\s+RunAs"
 
 
 def rules() -> list[Rule]:

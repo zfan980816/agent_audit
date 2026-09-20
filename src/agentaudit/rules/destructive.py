@@ -13,20 +13,21 @@ class D001(RegexRule):
     recommendation = "Confirm the deleted path scope; restore from VCS/backup if unintended."
     # NOTE: "rm" intentionally has no leading \b so compound commands like
     # "git rm -rf" still hit.
+    # middle spans capped {0,400}: adversarial repeated anchors stay linear (ReDoS hardening)
     pattern = (
         # flag cluster containing both r and f (no trailing \b: -rfi etc. still hit)
         r"rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"
         # separated flags: rm -r ... -f (either order), long flags included
-        r"|rm\b[^|;&\n]*\s-r[a-zA-Z]*\b[^|;&\n]*\s-f[a-zA-Z]*\b"
-        r"|rm\b[^|;&\n]*\s-f[a-zA-Z]*\b[^|;&\n]*\s-r[a-zA-Z]*\b"
-        r"|rm\b[^|;&\n]*--recursive\b[^|;&\n]*--force\b"
-        r"|rm\b[^|;&\n]*--force\b[^|;&\n]*--recursive\b"
+        r"|rm\b[^|;&\n]{0,400}\s-r[a-zA-Z]*\b[^|;&\n]{0,400}\s-f[a-zA-Z]*\b"
+        r"|rm\b[^|;&\n]{0,400}\s-f[a-zA-Z]*\b[^|;&\n]{0,400}\s-r[a-zA-Z]*\b"
+        r"|rm\b[^|;&\n]{0,400}--recursive\b[^|;&\n]{0,400}--force\b"
+        r"|rm\b[^|;&\n]{0,400}--force\b[^|;&\n]{0,400}--recursive\b"
         r"|\brd\s+/s\s+/q\b"
         # /s and /q anywhere in the del command (any flag order/prefix)
-        r"|\bdel\b[^|;&\n]*/s\b[^|;&\n]*/q\b"
-        r"|\bdel\b[^|;&\n]*/q\b[^|;&\n]*/s\b"
-        r"|Remove-Item\b[^|;&\n]*-Recurse\b[^|;&\n]*-Force"
-        r"|Remove-Item\b[^|;&\n]*-Force\b[^|;&\n]*-Recurse"
+        r"|\bdel\b[^|;&\n]{0,400}/s\b[^|;&\n]{0,400}/q\b"
+        r"|\bdel\b[^|;&\n]{0,400}/q\b[^|;&\n]{0,400}/s\b"
+        r"|Remove-Item\b[^|;&\n]{0,400}-Recurse\b[^|;&\n]{0,400}-Force"
+        r"|Remove-Item\b[^|;&\n]{0,400}-Force\b[^|;&\n]{0,400}-Recurse"
     )
 
 
@@ -39,7 +40,7 @@ class D002(RegexRule):
     pattern = (
         r"git\s+reset\s+--hard\b"
         r"|git\s+clean\s+-\w*f"
-        r"|git\s+push\b[^|;&\n]*(\s--force\b|\s--force-with-lease\b|\s-[a-z]*f[a-z]*\b)"
+        r"|git\s+push\b[^|;&\n]{0,400}(\s--force\b|\s--force-with-lease\b|\s-[a-z]*f[a-z]*\b)"
         r"|git\s+reflog\s+expire\b"
     )
 
@@ -60,7 +61,7 @@ class D004(RegexRule):
     explanation = "Raw device writes and filesystem formatting destroy all data on the target disk."
     recommendation = "Verify the target device; recover from backup if unintended."
     pattern = (
-        r"\bdd\b[^|;&\n]*of=/dev/\w+"
+        r"\bdd\b[^|;&\n]{0,400}of=/dev/\w+"
         r"|\bmkfs(\.\w+)?\b"
         r"|diskutil\s+erase\w*"
         r"|\bformat\s+[a-zA-Z]:(\s|$|;)"
@@ -74,9 +75,9 @@ class D005(RegexRule):
     explanation = "Pruning all docker resources or killing system processes can take down unrelated services."
     recommendation = "Scope the operation to named resources only."
     pattern = (
-        r"docker\s+system\s+prune\b[^|;&\n]*(\s--volumes\b|\s--all\b|\s-[a-z]*a[a-z]*\b)"
+        r"docker\s+system\s+prune\b[^|;&\n]{0,400}(\s--volumes\b|\s--all\b|\s-[a-z]*a[a-z]*\b)"
         r"|killall\s+\w+"
-        r"|taskkill\b[^|;&\n]*\s/im\b[^|;&\n]*(explorer|svchost|csrss|wininit)"
+        r"|taskkill\b[^|;&\n]{0,400}\s/im\b[^|;&\n]{0,400}(explorer|svchost|csrss|wininit)"
     )
 
 

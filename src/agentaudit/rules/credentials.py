@@ -11,7 +11,8 @@ class C001(RegexRule):
     title = "Read .env file"
     explanation = ".env files typically hold API keys and database credentials."
     recommendation = "Check whether the secret values were further used or transmitted."
-    pattern = r"\b(cat|type|less|more|head|tail|bat|Get-Content|gc)\b[^|;&\n]*\.env\b"
+    # middle spans capped {0,400}: adversarial repeated anchors stay linear (ReDoS hardening)
+    pattern = r"\b(cat|type|less|more|head|tail|bat|Get-Content|gc)\b[^|;&\n]{0,400}\.env\b"
 
 
 class C002(RegexRule):

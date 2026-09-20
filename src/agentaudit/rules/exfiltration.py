@@ -15,10 +15,11 @@ class E001(RegexRule):
     recommendation = "Treat the secret as compromised; rotate and block the destination."
     # NOTE: `-d\s*@` (DEVIATION from the plan's `-d\s+@`): curl accepts the
     # attached form `-d@file` with no space, which `\s+` missed.
+    # middle spans capped {0,400}: adversarial repeated anchors stay linear (ReDoS hardening)
     pattern = (
-        r"(\bcat|\btype)\b[^|;&\n]*(id_rsa|\.pem\b|\.env\b|\.key\b)[^|;&\n]*\|[^|;&\n]*(curl|wget)"
-        r"|(curl|wget)\b[^|;&\n]*(--data\b|-d)\s*@"
-        r"|(curl|wget)\b[^|;&\n]*-F\b[^|;&\n]*file=@"
+        r"(\bcat|\btype)\b[^|;&\n]{0,400}(id_rsa|\.pem\b|\.env\b|\.key\b)[^|;&\n]{0,400}\|[^|;&\n]{0,400}(curl|wget)"
+        r"|(curl|wget)\b[^|;&\n]{0,400}(--data\b|-d)\s*@"
+        r"|(curl|wget)\b[^|;&\n]{0,400}-F\b[^|;&\n]{0,400}file=@"
     )
 
 
@@ -28,7 +29,7 @@ class E002(RegexRule):
     title = "Command-substitution exfiltration"
     explanation = "Command substitution $(cat <secret>) inlines secret contents into another command."
     recommendation = "Treat the secret as compromised; rotate it."
-    pattern = r"\$\(\s*(cat|type)\s+[^)\n]*(id_rsa|\.pem\b|\.env\b|\.key\b)"
+    pattern = r"\$\(\s*(cat|type)\s+[^)\n]{0,400}(id_rsa|\.pem\b|\.env\b|\.key\b)"
 
 
 class E003(RegexRule):
