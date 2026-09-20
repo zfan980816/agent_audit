@@ -23,8 +23,10 @@ class C002(RegexRule):
     recommendation = "Rotate the key if it was exposed to the model context."
     pattern = (
         r"\bid_(rsa|ed25519|ecdsa)\b"
-        # \b prefix keeps the scan linear (unanchored char-class is quadratic on long commands)
-        r"|\b[\w./\\-]+\.(pem|key|ppk)\b"
+        # \b prefix + {1,200} cap keep the scan linear: '.' and '/' are non-word
+        # chars inside the class, so each word->punct transition is a fresh start
+        # candidate whose greedy run backtracks (quadratic on dot/slash-heavy tokens)
+        r"|\b[\w./\\-]{1,200}\.(pem|key|ppk)\b"
         r"|\bserviceAccount[\w.-]*\.json\b"
     )
 

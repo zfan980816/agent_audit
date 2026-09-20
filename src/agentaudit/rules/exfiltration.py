@@ -57,10 +57,10 @@ class E004(RegexRule):
 _ARCHIVE_CREATE_RE = re.compile(r"zip\s+-\w*r|tar\s+-\w*c\w*f|Compress-Archive", re.IGNORECASE)
 # NOTE: DEVIATION from the plan's `(\S+\.(?:zip|...))`: an unanchored `\S+` is a
 # start candidate at every position and backtracks the whole token per position —
-# quadratic on long commands (619ms on a 20k dot-free token). Same fix as the
-# accepted C002 change: a \b prefix + path-char class keeps the scan linear
-# (0.3ms) and still matches relative paths like ./builds/proj.zip.
-_ARCHIVE_NAME_RE = re.compile(r"(\b[\w./\\-]+\.(?:zip|tar\.gz|tgz|tar|7z))(?:\s|$|[;&|])", re.IGNORECASE)
+# quadratic on long commands. Same fix family as C002: \b prefix + path-char
+# class {1,200} cap keeps the scan linear (dot/slash-heavy tokens included) and
+# still matches relative paths like ./builds/proj.zip.
+_ARCHIVE_NAME_RE = re.compile(r"(\b[\w./\\-]{1,200}\.(?:zip|tar\.gz|tgz|tar|7z))(?:\s|$|[;&|])", re.IGNORECASE)
 _UPLOAD_CMD_RE = re.compile(r"\b(curl|wget|scp|sftp)\b", re.IGNORECASE)
 
 

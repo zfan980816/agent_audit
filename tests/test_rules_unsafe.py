@@ -54,5 +54,6 @@ def test_registry_has_28_rules_and_categories():
     prefixes = {i[0] for i in ids}
     assert prefixes == {"D", "C", "E", "B", "U"}
     assert set(prefixes) <= set(CATEGORY_TITLES)
-    # 每次调用返回全新实例(有状态规则 E005 需要)
-    assert all_rules()[0] is not rules[0]
+    # 每次调用返回全新实例(有状态规则 E005 需要)——全对象对比,不止首个
+    a, b = all_rules(), all_rules()
+    assert all(x is not y for x, y in zip(a, b))
