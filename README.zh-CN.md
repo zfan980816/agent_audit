@@ -45,11 +45,11 @@ Python 3.10+ 备选:`uvx agent-audit`(免安装)或 `pipx install agent-audit`
 
 ## 实现说明
 
-v0.2 用 TypeScript 重写了本工具(`npm/`)作为规范实现——与 Python 原版逐字节等价,由自动化等价性校验在 demo、边界语料与真实会话数据上验证。Python 实现(`src/agentaudit`)定格于 v0.1.1,作为移植参照与规格。
+v0.2 用 TypeScript 重写了本工具(`npm/`)作为规范实现——在 v0.1 输出面上与 Python 原版等价,由自动化等价性校验在 demo、边界语料与真实会话数据上验证(v0.2.x 增加了 by_agent 等 TS 专属字段,校验时已归一化)。Python 实现(`src/agentaudit`)定格于 v0.1.1,作为移植参照与规格。
 
 ## 路线图
 
-- v0.2:已完成——TypeScript/npm 规范移植(与 Python 原版逐字节等价)
+- v0.2:已完成——TypeScript/npm 规范移植(v0.1 输出面等价)
 - v0.2.x:支持 Codex CLI / Gemini CLI,SARIF 导出
 - v0.3:guard 模式——在危险操作执行前拦截(PreToolUse hook)
 

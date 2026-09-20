@@ -62,10 +62,12 @@ Exit codes: `0` on success (findings do NOT change the exit code yet — a
 ## Implementation note
 
 v0.2 rewrote agent-audit in TypeScript as the canonical implementation
-(`npm/`) — byte-for-byte equivalent to the Python original, verified by an
-automated equivalence harness on the demo, boundary corpora, and real session
-data. The Python implementation (`src/agentaudit`) is frozen at v0.1.1 as the
-porting reference and spec.
+(`npm/`) — output-equivalent to the Python original on the v0.1 surface,
+verified by an automated equivalence harness on the demo, boundary corpora,
+and real session data (v0.2.x adds TS-only summary fields such as `by_agent`,
+which the harness normalizes out of the parity comparison). The Python
+implementation (`src/agentaudit`) is frozen at v0.1.1 as the porting
+reference and spec.
 
 ## Roadmap
 

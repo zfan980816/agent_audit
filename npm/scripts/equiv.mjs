@@ -122,6 +122,23 @@ const runTs = (args) =>
 // ledger N: CRLF -> LF before any comparison
 const crNormalize = (buf) => buf.toString("utf8").replace(/\r\n/g, "\n");
 
+// v0.2.x parity normalization (M1): summary.by_agent is a TS-canonical key
+// with no Python counterpart (multi-agent plan decision 4 — Python is frozen
+// at v0.1.1). The parity gate compares the v0.1 surface, so the TS side strips
+// by_agent and re-serializes with identical indentation before byte-compare.
+const parityNormalize = (text) => {
+  try {
+    const data = JSON.parse(text);
+    if (data && data.summary && "by_agent" in data.summary) {
+      delete data.summary.by_agent;
+      return JSON.stringify(data, null, 2) + "\n";
+    }
+  } catch {
+    /* non-JSON output compares as-is */
+  }
+  return text;
+};
+
 // ------------------------------------------------------- boundary corpus ----
 // Constraints mirror the port divergence ledger so constructed data cannot
 // trip a KNOWN, accepted difference (the ledger documents them; the gate is
@@ -537,7 +554,7 @@ async function runGate(name, args) {
   const py = await runPy(args);
   const ts = await runTs(args);
   const pyOut = crNormalize(py.stdout);
-  const tsOut = crNormalize(ts.stdout);
+  const tsOut = parityNormalize(crNormalize(ts.stdout));
   const byteEqual = pyOut === tsOut;
   const exitOk = py.code === ts.code;
   const pass = byteEqual && exitOk && !py.timedOut && !ts.timedOut;
@@ -577,11 +594,14 @@ async function bisectCorpus(gate) {
     const args = [f, ...gate.args.slice(1)]; // file path + variant flags
     const py = await runPy(args);
     const ts = await runTs(args);
-    const equal = crNormalize(py.stdout) === crNormalize(ts.stdout);
+    const equal =
+      crNormalize(py.stdout) === parityNormalize(crNormalize(ts.stdout));
     const ok = equal && py.code === ts.code;
     console.log(`  ${ok ? "ok  " : "DIFF"} ${f}`);
     if (!ok) {
-      console.log(`      ${firstDiffLines(crNormalize(py.stdout), crNormalize(ts.stdout))}`);
+      console.log(
+        `      ${firstDiffLines(crNormalize(py.stdout), parityNormalize(crNormalize(ts.stdout)))}`,
+      );
     }
   }
 }
@@ -633,7 +653,7 @@ async function realGates() {
     const py = await runPy(["--json"]);
     const ts = await runTs(["--json"]);
     const pyOut = crNormalize(py.stdout);
-    const tsOut = crNormalize(ts.stdout);
+    const tsOut = parityNormalize(crNormalize(ts.stdout));
     const pyS = summarize("py", pyOut);
     const tsS = summarize("ts", tsOut);
     const exitOk = py.code === ts.code;
@@ -664,7 +684,7 @@ async function realGates() {
     const py = await runPy(args);
     const ts = await runTs(args);
     const pyOut = crNormalize(py.stdout);
-    const tsOut = crNormalize(ts.stdout);
+    const tsOut = parityNormalize(crNormalize(ts.stdout));
     const byteEqual = pyOut === tsOut;
     const exitOk = py.code === ts.code;
     const pass = byteEqual && exitOk;
