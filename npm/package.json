@@ -1,0 +1,25 @@
+{
+  "name": "agent-audit",
+  "version": "0.2.0",
+  "description": "npm audit for your AI coding agents - audit dangerous actions in agent session history",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agent-audit": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "~5.9.2",
+    "vitest": "^2.1.9"
+  }
+}
