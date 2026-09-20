@@ -65,3 +65,15 @@ def test_files_failed_surfaced(tmp_path):
     buf = io.StringIO()
     render_terminal(result, console=Console(file=buf, force_terminal=False, width=160))
     assert "failed to read 1" in buf.getvalue()
+
+
+def test_bracket_evidence_renders_without_markup_crash(tmp_path):
+    # evidence with [/...] would raise rich MarkupError if cells were plain str;
+    # D001's match span over "del /s [/etc] /q" carries the brackets verbatim
+    result = run_audit([write_jsonl(tmp_path / "a.jsonl", [
+        make_tool_line("Bash", {"command": "del /s [/etc] /q"}),
+    ])])
+    assert [f.rule_id for f in result.findings] == ["D001"]
+    buf = io.StringIO()
+    render_terminal(result, console=Console(file=buf, force_terminal=False, width=160))
+    assert "[/etc]" in buf.getvalue()  # brackets preserved literally, no crash

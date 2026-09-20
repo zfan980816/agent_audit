@@ -7,6 +7,7 @@ from collections import Counter
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from agentaudit.engine import AuditResult
 from agentaudit.events import SEVERITY_ORDER, Severity
@@ -70,10 +71,13 @@ def render_terminal(result: AuditResult, floor: Severity = Severity.LOW,
                        ("PROJECT", 16), ("SESSION", 10), ("WHEN", 11), ("EVIDENCE", 40)):
         table.add_column(col, ratio=ratio, overflow="fold")
     for f in findings[:200]:
+        # Text() around history-controlled cells: plain str cells are parsed as
+        # rich markup, so evidence like "awk [/etc/passwd] x" would crash or
+        # silently drop text (MarkupError on stray [/...] tags)
         table.add_row(
             SEV_LABEL[f.severity], f.rule_id, f.title,
-            _short_project(f.event.project), f.event.session_id[:8],
-            _short_ts(f), f.evidence,
+            Text(_short_project(f.event.project)), Text(f.event.session_id[:8]),
+            _short_ts(f), Text(f.evidence),
         )
     console.print(table)
 
