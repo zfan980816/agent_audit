@@ -77,7 +77,9 @@ class D005(RegexRule):
     pattern = (
         r"docker\s+system\s+prune\b[^|;&\n]{0,400}(\s--volumes\b|\s--all\b|\s-[a-z]*a[a-z]*\b)"
         r"|killall\s+\w+"
-        r"|taskkill\b[^|;&\n]{0,400}\s/im\b[^|;&\n]{0,400}(explorer|svchost|csrss|wininit)"
+        # single middle span: the system-process name is the strong signal;
+        # a chained /\im\b + name middle was quadratic on repeated anchors
+        r"|taskkill\b[^|;&\n]{0,400}\b(explorer|svchost|csrss|wininit)\b"
     )
 
 
