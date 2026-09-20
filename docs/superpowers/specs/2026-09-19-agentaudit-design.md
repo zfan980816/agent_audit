@@ -138,6 +138,16 @@ MVP 规则主要消费 ShellCommand 与 FileWrite；NetworkRequest / McpToolCall
 - `chmod 7777 /x`(D003 保守漏报)、`chmod a+rwx /x`
 - `sh -c "sudo rm x"`、`/usr/bin/sudo x`(B006 前缀类缺 `/"'`)
 - `tar cf out.tar src`(D/E005 无短横线 tar 形态)、`zip -r "my proj.zip"`(引号名)
+
+**隐蔽外发(v0.2 重点:从「命令形态」升级到「行为配对」)**
+
+2026-09-20 实测 5 种隐蔽收集上传形态,仅 1 种命中(`-d @-` 因旗标形态被 E001 兜住,与编码无关)。正则匹配命令形态,蓄意隐蔽 = 换形态,穷举不可行;v0.2 的正解是泛化 E005 的有状态思路:
+
+- **E006 collect→send(设计方向,优先级最高)**:捕获 Read 工具事件(当前事件模型完全没有 Read,「Agent 读了 N 个源码文件」这一最强前兆不可见),按会话累计源码读取量(文件数/字节);之后任何出站传输(curl/wget/scp/rsync/gh/任意旗标)超阈值 → HIGH。实测漏掉的 4 形态全部落网:编码混淆(`cat x.py | base64 | curl -d @-`——勿依赖 -d@ 侥幸)、`--data-binary`/`-T` 旗标变体、scp 分片慢传、`gh gist create --public` 合法渠道伪装
+- **E007 URL 查询串外带**:NetworkRequest 通道检查查询串长度/熵(`?d=PGgxPnNlY3JldA…`),抓 WebFetch GET 参数外带
+- **MCP 出站规则**:McpToolCall 事件已存在但零规则覆盖;upload/push/send 类 MCP 工具需规则(注意 args_hint 截断 200 字符,长载荷检测需先放宽)
+- **前提改造**:解析器增加 Read→FileRead 事件(含 bytes 数);WebFetch 的完整 URL 已在 NetworkRequest.url,无需改
+- **上限认知**:日志审计是扣分式而非证明式,想象力外的编码/信道仍会漏;蓄意攻击者的最终防线是 v0.3 guard(执行时拦截),事后审计负责懒 Agent 与绝大多数真实事件(真实事件多为 zip+curl 直球形态)
 - `1169.254.169.254`(U003 只防右侧子域伪装,无 lookbehind)
 
 **误报(可接受但可调优)**
