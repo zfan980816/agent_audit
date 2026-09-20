@@ -7,8 +7,8 @@ dangerous action your agents ever took — destructive commands, credential
 access, data exfiltration, persistence installs, unsafe downloads.
 
 ```bash
-uvx agent-audit         # audit ~/.claude/projects immediately
-agentaudit --demo       # no Claude Code? try the built-in demo
+npx agent-audit         # audit ~/.claude/projects immediately
+agent-audit --demo      # no Claude Code? try the built-in demo
 ```
 
 ```
@@ -57,7 +57,7 @@ Python 3.10+ alternative: `uvx agent-audit` (no install) or
 - Works on Windows, macOS and Linux.
 
 Exit codes: `0` on success (findings do NOT change the exit code yet — a
-`--fail-on` flag is planned for v0.2), `2` on bad options or missing data dir.
+`--fail-on` flag is planned), `2` on bad options or missing data dir.
 
 ## Implementation note
 

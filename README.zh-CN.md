@@ -5,8 +5,8 @@
 一条命令扫描本机 Claude Code 会话历史,报告你的 Agent 曾经做过的每一个危险操作:破坏性命令、凭证访问、数据外发、持久化植入、危险下载。
 
 ```bash
-uvx agent-audit          # 立即审计 ~/.claude/projects
-agentaudit --demo       # 没装 Claude Code?跑内置演示
+npx agent-audit         # 立即审计 ~/.claude/projects
+agent-audit --demo      # 没装 Claude Code?跑内置演示
 ```
 
 ## 检测什么(28 条规则)
@@ -41,7 +41,7 @@ Python 3.10+ 备选:`uvx agent-audit`(免安装)或 `pipx install agent-audit`
 - 100% 本地解析,永不联网,无遥测
 - Windows / macOS / Linux 全支持(Windows 优先测试)
 
-退出码:成功为 `0`(发现项不影响退出码——`--fail-on` 计划于 v0.2),参数错误或数据目录缺失为 `2`。
+退出码:成功为 `0`(发现项不影响退出码——`--fail-on` 计划中),参数错误或数据目录缺失为 `2`。
 
 ## 实现说明
 
