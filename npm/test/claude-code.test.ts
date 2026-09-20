@@ -167,3 +167,17 @@ test("dotted parent dir name kept as fallback project", async () => {
   const { events } = await collect(p);
   expect(events[0]?.project).toBe("D--my.proj.v2");
 });
+
+// Python fromisoformat rejects loose formats JS new Date() accepts
+// (epoch-ms strings, "Sep 19 2026"); parseTs must reject them too.
+test("non-ISO timestamps rejected like Python fromisoformat", async () => {
+  const dir = makeTmpDir();
+  const p = join(dir, "ts.jsonl");
+  writeJsonl(p, [
+    makeToolLine("Bash", { command: "ls" }, { ts: "1726713600000" }),
+    makeToolLine("Bash", { command: "ls" }, { ts: "Sep 19 2026" }),
+    makeToolLine("Bash", { command: "ls" }, { ts: "2026/09/19" }),
+  ]);
+  const { events } = await collect(p);
+  expect(events.map((e) => e.timestamp)).toEqual([null, null, null]);
+});

@@ -31,11 +31,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // Python _parse_ts: non-string/empty -> None; try parse; invalid -> None.
 // (Python replaces "Z" with "+00:00" for fromisoformat; new Date() parses the
 // Z suffix natively, so a plain parse keeps the same accept/reject outcome.)
+// Python _parse_ts = datetime.fromisoformat (after Z→+00:00): accepts ISO
+// date/datetime forms only. JS new Date() is far looser (epoch-ms strings,
+// "Sep 19 2026", ...) — guard with an ISO-shape check so the two stay aligned
+// (timestamps flow into report output and the T8 equivalence gate).
+const ISO_SHAPE =
+  /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
 function parseTs(raw: unknown): Date | null {
-  if (typeof raw !== "string" || raw === "") {
+  if (typeof raw !== "string" || raw === "" || !ISO_SHAPE.test(raw)) {
     return null;
   }
-  const date = new Date(raw);
+  const date = new Date(raw.includes("T") || raw.includes(" ") ? raw.replace(" ", "T") : `${raw}T00:00:00Z`);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
