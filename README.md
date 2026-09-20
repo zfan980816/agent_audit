@@ -7,7 +7,7 @@ dangerous action your agents ever took — destructive commands, credential
 access, data exfiltration, persistence installs, unsafe downloads.
 
 ```bash
-uvx agentaudit          # audit ~/.claude/projects immediately
+uvx agent-audit         # audit ~/.claude/projects immediately
 agentaudit --demo       # no Claude Code? try the built-in demo
 ```
 
@@ -41,7 +41,7 @@ were disclosed. Nobody reviews what their agent already did — until now.
 Requires Python 3.10+.
 
 ```bash
-pipx install agentaudit   # or: uvx agentaudit (no install)
+pipx install agent-audit   # or: uvx agent-audit (no install)
 agentaudit                # audit default location
 agentaudit ~/somewhere    # audit a custom projects dir / .jsonl file
 agentaudit --json         # machine-readable output

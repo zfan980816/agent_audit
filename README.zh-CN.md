@@ -5,7 +5,7 @@
 一条命令扫描本机 Claude Code 会话历史,报告你的 Agent 曾经做过的每一个危险操作:破坏性命令、凭证访问、数据外发、持久化植入、危险下载。
 
 ```bash
-uvx agentaudit          # 立即审计 ~/.claude/projects
+uvx agent-audit          # 立即审计 ~/.claude/projects
 agentaudit --demo       # 没装 Claude Code?跑内置演示
 ```
 
@@ -26,7 +26,7 @@ agentaudit --demo       # 没装 Claude Code?跑内置演示
 需要 Python 3.10+。
 
 ```bash
-pipx install agentaudit
+pipx install agent-audit
 agentaudit              # 审计默认目录
 agentaudit --json       # 机器可读输出
 agentaudit --share      # 输出可分享的摘要卡

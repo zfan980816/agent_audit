@@ -41,7 +41,7 @@ def test_demo_terminal_and_share():
     res = runner.invoke(app, ["--demo", "--share"])
     assert res.exit_code == 0
     assert "agentaudit" in res.output
-    assert "uvx agentaudit" in res.output
+    assert "npx agent-audit" in res.output
 
 
 def test_missing_path_errors_cleanly(tmp_path):

@@ -1,5 +1,5 @@
 [project]
-name = "agentaudit"
+name = "agent-audit"
 version = "0.1.1"
 description = "npm audit for your AI coding agents - audit dangerous actions in agent session history"
 readme = "README.md"

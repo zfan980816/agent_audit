@@ -50,9 +50,9 @@ def test_to_dict_roundtrip(tmp_path):
 def test_share_card_lines(tmp_path):
     result = make_result(tmp_path)
     card = share_card(result)
-    assert "agentaudit" in card
+    assert "agent-audit" in card
     assert "CRITICAL 1" in card
-    assert "uvx agentaudit" in card
+    assert "npx agent-audit" in card
 
 
 def test_files_failed_surfaced(tmp_path):

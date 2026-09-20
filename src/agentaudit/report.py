@@ -124,7 +124,7 @@ def share_card(result: AuditResult) -> str:
         f"{SEV_LABEL[sev]} {counts[sev]}" for sev in _SEV_ORDERED if counts[sev]
     ) or "no findings"
     return (
-        "──── agentaudit · AI agent safety report ────\n"
+        "──── agent-audit · AI agent safety report ────\n"
         f"Sessions: {len(result.sessions)}   {stats}\n"
-        "Audit your own agents → uvx agentaudit"
+        "Audit your own agents → npx agent-audit"
     )
