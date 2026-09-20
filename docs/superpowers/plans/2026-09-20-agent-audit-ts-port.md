@@ -112,3 +112,5 @@
 - **I·Unicode 词边界**:Python `\w/\b` Unicode 感知,JS 仅 ASCII——非 ASCII 字母与词字符邻接时判定可分叉(如 `caté .env` Python 漏/TS 中;证据截断点亦可偏移)。仅怪异输入触发,TS 偏向误报不漏报;T8 语料避免非 ASCII 命令字符紧邻模式锚点
 - **J·`\s` 类成员差**:Python `\s` 含 `\x1c-\x1f`/`\x85`(不含 `\xa0`),JS 相反(含 ` `/`﻿`)——仅控制字符/奇 Unicode 输入的 `\s` 锚点处可分叉,同 I 族
 - **K·B001 `$` 尾换行**:Python `$` 接受串尾 `\n`,JS 不——basename 内含换行的路径(B001)可分叉,exotic
+- **L·µs 时间戳**:JS Date 毫秒精度,4-6 位小数秒被截断(`.123456`→`.123000`);Python 保留 6 位。真实 Claude Code 恒为毫秒级,不触发
+- **M·win32 颜色**:picocolors 在 win32 无条件着色(rich 按 isatty)——T7 CLI 层须在非 TTY 时设 NO_COLOR 对齐

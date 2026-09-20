@@ -19,8 +19,9 @@ const SEV_LABEL: Record<Severity, string> = {
 };
 
 // Python: SEV_STYLE via picocolors — "bold white on red" -> white text on red
-// background, bolded. picocolors disables itself off-TTY (rich's
-// force_terminal=False test console has no TS equivalent need).
+// background, bolded. NOTE: picocolors colors UNCONDITIONALLY on win32 (even
+// off-TTY); the CLI layer must set NO_COLOR when stdout is not a TTY to match
+// rich's isatty gating.
 function colorSev(text: string, sev: Severity): string {
   switch (sev) {
     case "critical":
