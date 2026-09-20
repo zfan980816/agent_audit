@@ -361,8 +361,15 @@ export async function* iterEvents(
 
       if (itemType === "web_search_call") {
         const action = isRecord(payload["action"]) ? payload["action"] : {};
-        // search -> query, open_page/find_in_page -> url (Python `or` chain)
-        const url = action["query"] || action["url"];
+        // search -> query, open_page/find_in_page -> url (Python `or` chain);
+        // newer builds may carry queries: [str] instead of singular query
+        const queries = action["queries"];
+        const url =
+          action["query"] ||
+          action["url"] ||
+          (Array.isArray(queries) && typeof queries[0] === "string"
+            ? queries[0]
+            : undefined);
         if (typeof url === "string" && url) {
           stats.events += 1;
           yield new NetworkRequest(sessionId, project, ts, url);

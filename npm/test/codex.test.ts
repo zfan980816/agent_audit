@@ -212,14 +212,17 @@ test("web_search_call: search query and open_page url become NetworkRequest", as
     codexWebSearch({ type: "search", query: "openai codex cli" }),
     codexWebSearch({ type: "open_page", url: "https://example.com/page" }),
     codexWebSearch({ type: "find_in_page", url: "https://example.com/page", pattern: "x" }),
+    // documented variant: queries array instead of singular query
+    codexWebSearch({ type: "search", queries: ["codex rollout format"] }),
   ]);
   const { events } = await collect(p);
-  expect(events).toHaveLength(3);
+  expect(events).toHaveLength(4);
   expect(events.every((e) => e instanceof NetworkRequest)).toBe(true);
   expect(events.map((e) => (e as NetworkRequest).url)).toEqual([
     "openai codex cli",
     "https://example.com/page",
     "https://example.com/page",
+    "codex rollout format",
   ]);
 });
 
