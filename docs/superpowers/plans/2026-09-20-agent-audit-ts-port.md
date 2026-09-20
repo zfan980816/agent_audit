@@ -96,3 +96,16 @@
 - C 盘满:uv/pytest 三前缀照旧;npm 缓存设 D 盘(`npm config set cache D:/npm-cache`,Task T1 做)
 - 复杂内联 node -e 命令若 EPERM → 写 D:/tmp 脚本再跑
 - Windows 换行:源码 LF,git autocrlf 警告无害
+
+## 移植差异台账(T2 保真度审查确立;T8 语料须有意覆盖或避开)
+
+已修复(5b39863):args_hint 分隔符/转义(自写 pyJsonDumps)、fallback_project 点号目录名。
+
+接受的边界差异(真实 Claude Code 数据不会触发;构造语料时**避开或显式断言**):
+- **C·BOM**:Node 流解码剥掉 UTF-8 BOM(首行正常解析),Python 保留导致跳行计数 +1
+- **D·大小写**:Windows 上 Python pathlib 对 `.JSONL` 大小写不敏感且排序 casefold,TS 端大小写敏感 + 码元排序(语料全用小写 `.jsonl` 即无差异)
+- **E·非标准 JSON 字面量**:`NaN/Infinity` Python json.loads 接受、JSON.parse 拒绝(计数差 1)
+- **F·无 Z 时间戳**:naive 字符串 Python 按原样存、TS 按本地时区解释(真实数据恒为 Z 后缀)
+- **G·非字符串 cwd**:Python 原样存(int 等)、TS 归 null
+- **浮点数 args_hint**:Python `1.0` 输出 `1.0`、JS 输出 `1`(工具入参几乎全为整数/字符串)
+- **H·目录 junction**:Python rglob 跟随、TS 跳过(exotic)
