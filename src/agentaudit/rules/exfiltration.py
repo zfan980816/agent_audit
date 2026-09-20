@@ -17,9 +17,9 @@ class E001(RegexRule):
     # attached form `-d@file` with no space, which `\s+` missed.
     # middle spans capped {0,400}: adversarial repeated anchors stay linear (ReDoS hardening)
     pattern = (
-        r"(\bcat|\btype)\b[^|;&\n]{0,400}(id_rsa|\.pem\b|\.env\b|\.key\b)[^|;&\n]{0,400}\|[^|;&\n]{0,400}(curl|wget)"
-        r"|(curl|wget)\b[^|;&\n]{0,400}(--data\b|-d)\s*@"
-        r"|(curl|wget)\b[^|;&\n]{0,400}-F\b[^|;&\n]{0,400}file=@"
+        r"(\bcat|\btype)\b[^|;&\n]{0,400}(id_rsa|\.pem\b|\.env\b|\.key\b)[^|;&\n]{0,400}\|[^|;&\n]{0,400}\b(curl|wget)\b"
+        r"|\b(curl|wget)\b[^|;&\n]{0,400}(--data\b|-d)\s*@"
+        r"|\b(curl|wget)\b[^|;&\n]{0,400}-F\b[^|;&\n]{0,400}file=@"
     )
 
 
@@ -76,7 +76,8 @@ class E005(Rule):
     """
 
     id = "E005"
-    severity = Severity.MEDIUM
+    # v0.1.1: whole-repo archive-then-upload raised from MEDIUM to HIGH
+    severity = Severity.HIGH
     title = "Archive-then-upload pattern"
     explanation = "A directory was archived and the archive was immediately uploaded within the same session."
     recommendation = "Confirm the upload destination is authorized for this codebase."

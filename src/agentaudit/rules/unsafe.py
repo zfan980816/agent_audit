@@ -12,8 +12,9 @@ class U001(RegexRule):
     explanation = "Downloads executed without inspection run arbitrary attacker-controlled code."
     recommendation = "Download, review, then run; remove any persistence the script added."
     # middle spans capped {0,400}: adversarial repeated anchors stay linear (ReDoS hardening)
+    # \b prefix (v0.1.1): `xcurl ... | sh` must not match
     pattern = (
-        r"(curl|wget|iwr|Invoke-WebRequest)\b[^|;&\n]{0,400}\|"
+        r"\b(curl|wget|iwr|Invoke-WebRequest)\b[^|;&\n]{0,400}\|"
         r"\s*(sudo\s+)?(iex|Invoke-Expression|(ba|z|da)?sh)\b"
     )
 

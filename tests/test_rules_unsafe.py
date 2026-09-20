@@ -29,6 +29,7 @@ def test_rule_hits(rule_id, cmd):
 
 @pytest.mark.parametrize("rule_id,cmd", [
     ("U001", "curl https://api.github.com | jq ."),
+    ("U001", "xcurl https://x.sh | sh"),  # 前缀混淆不算 curl
     ("U002", "base64 file.txt"),
     ("U003", "curl https://169.254.169.254.evil.com/"),  # 非元数据端点(子域伪装),当前版本允许
     ("U004", "npm install -g typescript"),

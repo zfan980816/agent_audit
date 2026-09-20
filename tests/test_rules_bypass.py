@@ -14,6 +14,8 @@ R = {r.id: r for r in rules()}
     ("B005", "echo ssh-ed25519 AAA x >> ~/.ssh/authorized_keys"),
     ("B006", "sudo rm x"),
     ("B006", "sudo apt install x"),
+    ("B006", "/usr/bin/sudo rm x"),
+    ("B006", "sh -c \"sudo rm -f x\""),
 ])
 def test_shell_hits(rule_id, cmd):
     from tests.conftest import shell

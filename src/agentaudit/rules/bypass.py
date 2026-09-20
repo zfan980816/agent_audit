@@ -27,7 +27,7 @@ class B001(Rule):
         if not event.content or not self._danger_re.search(event.content):
             return None
         return Finding(rule_id=self.id, severity=self.severity, title=self.title, event=event,
-                       evidence=event.path, explanation=self.explanation,
+                       evidence=event.path[:200], explanation=self.explanation,
                        recommendation=self.recommendation)
 
 
@@ -179,7 +179,9 @@ class B006(RegexRule):
     title = "Privilege escalation via sudo"
     explanation = "Commands ran as root; blast radius of any mistake or injection is the whole machine."
     recommendation = "Check each sudo invocation was justified."
-    pattern = r"(^|[\s;&|(])sudo\s|Start-Process\b[^|;&\n]{0,400}-Verb\s+RunAs"
+    # v0.1.1: prefix class also admits " ' / so `/usr/bin/sudo x` and
+    # `sh -c "sudo x"` forms are caught (word-start sudo only, sudoedit safe)
+    pattern = r"(^|[\s;&|(\"'/])sudo\s|Start-Process\b[^|;&\n]{0,400}-Verb\s+RunAs"
 
 
 def rules() -> list[Rule]:
