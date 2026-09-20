@@ -77,6 +77,8 @@ test("toDict emits Python key order (T8 gate)", async () => {
   // programmatic key-order gate: Python dicts serialize in insertion order,
   // so Object.keys order here must equal Python's dict-literal order exactly
   expect(Object.keys(data)).toEqual(["summary", "findings"]);
+  // M1 (v0.2.x multi-agent): by_agent appended AFTER the Python-parity prefix.
+  // TS is the canonical schema now (Python frozen at v0.1.1 has no by_agent).
   expect(Object.keys(data.summary)).toEqual([
     "files",
     "files_failed",
@@ -85,7 +87,10 @@ test("toDict emits Python key order (T8 gate)", async () => {
     "lines_skipped",
     "total",
     "by_severity",
+    "by_agent",
   ]);
+  // default string[] input is attributed to the claude-code parser
+  expect(data.summary.by_agent).toEqual({ "claude-code": 1 });
   expect(Object.keys(data.summary.by_severity)).toEqual([
     "critical",
     "high",

@@ -38,7 +38,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const ISO_SHAPE =
   /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
-function parseTs(raw: unknown): Date | null {
+// Exported for the v0.2.x agent parsers (kimi.ts reuses the identical
+// ISO-shape guard for string timestamps).
+export function parseTs(raw: unknown): Date | null {
   if (typeof raw !== "string" || raw === "" || !ISO_SHAPE.test(raw)) {
     return null;
   }

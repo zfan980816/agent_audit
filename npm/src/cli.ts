@@ -15,8 +15,9 @@ import { pathToFileURL } from "node:url";
 import { Command, CommanderError, type OptionValues } from "commander";
 import Table from "cli-table3";
 
+import { AGENTS, type AgentFileEntry } from "./agents.js";
 import { writeDemoSession } from "./demo.js";
-import { DataDirNotFoundError, findSessionFiles } from "./discovery.js";
+import { DataDirNotFoundError, comparePaths } from "./discovery.js";
 import { runAudit } from "./engine.js";
 import { SEVERITY_ORDER, type Severity } from "./events.js";
 import type { WriteFn } from "./report.js";
@@ -39,6 +40,8 @@ interface AuditFlags {
   session?: string;
   rules?: string;
   listRules?: boolean;
+  agent: string;
+  listAgents?: boolean;
   share?: boolean;
   demo?: boolean;
   version?: boolean;
@@ -76,6 +79,12 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
       "Rule category prefixes, comma separated (D,C,E,B,U)",
     )
     .option("--list-rules", "List all rules and exit")
+    .option(
+      "--agent <ids>",
+      "Agents to audit, comma separated: claude-code|kimi|all",
+      "all",
+    )
+    .option("--list-agents", "List known agents and exit")
     .option("--share", "Print a shareable summary card")
     .option("--demo", "Run on built-in demo data")
     .option("--version", "Show version")
@@ -129,6 +138,29 @@ async function auditCommand(
     return 0;
   }
 
+  if (opts.listAgents) {
+    // v0.2.x (TS-only flag, no Python parity): informational listing of the
+    // agent registry with per-agent default-root file counts. A missing data
+    // root just shows 0 — this is a listing, not an audit.
+    const agents = Object.values(AGENTS);
+    stdout(`agentaudit agents (${agents.length})\n`);
+    const table = new Table({
+      head: ["ID", "NAME", "SESSION FILES"],
+      style: { head: [], border: [] },
+    });
+    for (const agent of agents) {
+      let count = 0;
+      try {
+        count = agent.find().length;
+      } catch {
+        count = 0;
+      }
+      table.push([agent.id, agent.displayName, String(count)]);
+    }
+    stdout(`${table.toString()}\n`);
+    return 0;
+  }
+
   // Python: _parse_severity — typer.BadParameter exits 2 with this message
   const severityValue = opts.severity.toLowerCase();
   if (!(SEVERITY_ORDER as readonly string[]).includes(severityValue)) {
@@ -148,6 +180,22 @@ async function auditCommand(
       )
     : undefined;
 
+  // v0.2.x: --agent id[,id...]|all (default all = every registered agent).
+  // "all" expands to registry order; unknown ids exit 2 (typer usage-error code).
+  const agentNames = [...new Set(
+    opts.agent.split(",").map((s) => s.trim()).filter(Boolean),
+  )];
+  const ids = agentNames.includes("all") ? Object.keys(AGENTS) : agentNames;
+  if (ids.length === 0) {
+    stderr(`error: no agent ids given (known: ${Object.keys(AGENTS).join(", ")})\n`);
+    return 2;
+  }
+  const unknownId = ids.find((id) => !AGENTS[id]);
+  if (unknownId) {
+    stderr(`error: unknown agent "${unknownId}" (known: ${Object.keys(AGENTS).join(", ")})\n`);
+    return 2;
+  }
+
   let result;
   if (opts.demo) {
     // Python: tempfile.TemporaryDirectory() context manager
@@ -160,31 +208,55 @@ async function auditCommand(
     }
   } else {
     // Python: if path is not None and path.is_file() -> [path], else
-    // find_session_files(path); DataDirNotFound -> "error: ..." + exit 2
-    let files: string[] | null = null;
+    // find_session_files(path); DataDirNotFound -> "error: ..." + exit 2.
+    // v0.2.x: discovery runs per selected agent over {agent, path} entries so
+    // the engine can route each file to the right parser.
+    let entries: AgentFileEntry[] | null = null;
     if (pathArg !== undefined) {
       try {
         if (statSync(pathArg).isFile()) {
-          files = [pathArg];
+          // explicit file: route through the FIRST selected agent (default
+          // "all" -> claude-code, preserving v0.1 behavior for file args)
+          entries = [{ agent: ids[0]!, path: pathArg }];
         }
       } catch {
         // not stat-able == Python's is_file() False -> fall through to discovery
       }
     }
-    if (files === null) {
+    if (entries === null) {
+      entries = [];
       try {
-        files = findSessionFiles(pathArg);
+        for (const id of ids) {
+          try {
+            for (const path of AGENTS[id].find(pathArg)) {
+              entries.push({ agent: id, path });
+            }
+          } catch (err) {
+            // Error policy: an explicitly given path that cannot be scanned
+            // still fails loudly (v0.1 behavior, asserted by tests). Only a
+            // MISSING DEFAULT root (no path argument) demotes a single agent
+            // to a stderr hint when several were selected.
+            if (err instanceof DataDirNotFoundError && pathArg === undefined && ids.length > 1) {
+              stderr(`skipping ${id}: data directory not found\n`);
+              continue;
+            }
+            throw err;
+          }
+        }
       } catch (err) {
         if (err instanceof DataDirNotFoundError) {
+          // Python: DataDirNotFound -> "error: ..." + exit 2
           stderr(`error: ${err.message}\n`);
           return 2;
         }
         throw err;
       }
+      // deterministic interleaving of per-agent discoveries (pathlib compare)
+      entries.sort((a, b) => comparePaths(a.path, b.path));
     }
     // stderr keeps --json stdout pure; real dirs can take ~10s before output
-    stderr(`scanning ${files.length} session file(s)...\n`);
-    result = await runAudit(files, prefixes, opts.session);
+    stderr(`scanning ${entries.length} session file(s)...\n`);
+    result = await runAudit(entries, prefixes, opts.session);
   }
 
   // (ADJUSTMENT B) severity floor applies to BOTH terminal and JSON modes

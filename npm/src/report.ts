@@ -194,6 +194,10 @@ export interface ReportDict {
     lines_skipped: number;
     total: number;
     by_severity: Record<Severity, number>;
+    // v0.2.x multi-agent (M1): files attempted per agent. TS canonical schema
+    // (Python frozen at v0.1.1 has no by_agent); appended AFTER the
+    // Python-parity prefix so the v0.1 key order is preserved.
+    by_agent: Record<string, number>;
   };
   findings: ReportFindingDict[];
 }
@@ -211,6 +215,7 @@ export function toDict(result: AuditResult): ReportDict {
       // severityCounts zero-fills in critical->info order, matching Python's
       // {sev.value: counts[sev] for sev in _SEV_ORDERED}
       by_severity: { ...counts },
+      by_agent: { ...result.byAgent },
     },
     findings: result.findings.map(
       (f): ReportFindingDict => ({

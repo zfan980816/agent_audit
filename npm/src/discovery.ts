@@ -55,7 +55,9 @@ export function findSessionFiles(root?: string | null): string[] {
 // a.jsonl" flips ("." < "\" on the string, prefix rule on the parts) and
 // case-folded "C--"/"c--" dirs interleave. Real Claude Code data contains
 // both shapes (T8 real-data gate regression).
-function comparePaths(a: string, b: string): number {
+// Exported for the v0.2.x agent registry (agents.ts sorts multi-agent
+// discoveries with the same pathlib semantics).
+export function comparePaths(a: string, b: string): number {
   const fold =
     process.platform === "win32"
       ? (s: string) => s.toLowerCase()
