@@ -9,8 +9,8 @@ import type { Finding } from "./rules/base.js";
 
 export type WriteFn = (chunk: string) => void;
 
-// Python: SEV_LABEL
-const SEV_LABEL: Record<Severity, string> = {
+// Python: SEV_LABEL (also consumed by the CLI's --list-rules table)
+export const SEV_LABEL: Record<Severity, string> = {
   critical: "CRITICAL",
   high: "HIGH",
   medium: "MEDIUM",

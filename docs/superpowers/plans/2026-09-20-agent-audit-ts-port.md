@@ -113,4 +113,5 @@
 - **J·`\s` 类成员差**:Python `\s` 含 `\x1c-\x1f`/`\x85`(不含 `\xa0`),JS 相反(含 ` `/`﻿`)——仅控制字符/奇 Unicode 输入的 `\s` 锚点处可分叉,同 I 族
 - **K·B001 `$` 尾换行**:Python `$` 接受串尾 `\n`,JS 不——basename 内含换行的路径(B001)可分叉,exotic
 - **L·µs 时间戳**:JS Date 毫秒精度,4-6 位小数秒被截断(`.123456`→`.123000`);Python 保留 6 位。真实 Claude Code 恒为毫秒级,不触发
-- **M·win32 颜色**:picocolors 在 win32 无条件着色(rich 按 isatty)——T7 CLI 层须在非 TTY 时设 NO_COLOR 对齐
+- **M·win32 颜色**(T7 已解):picocolors v1.1.1 在**模块加载时**一次性决定着色(`module.exports = createColors()` 当场烤死,无按调用重读 env),且 win32 无条件 on(rich 按 isatty)——main() 里再设 NO_COLOR 为时已晚。解法:`npm/src/tty-gate.ts` 作为 cli.ts 的**首个 import**,在加载期设 `NO_COLOR=1`(ESM 按声明序求值,先于 report→picocolors);冒烟已证:管道下 `--demo` / `--demo --json` 输出 0 个 `\x1b`
+- **N·demo 文件换行**(T7 对拍发现):Python `Path.write_text` 经 TextIOWrapper 在 win32 把 `\n` 翻译成 CRLF(实测 15 行全 CRLF),POSIX 上才是 LF;计划已定死 TS 输出为源字符串原样 LF。对拍结果:Python 输出 `tr -d '\r'` 后与 TS 输出 **4223 字节逐字节一致**(长度差恰为 15 个 CR);解析层对两种换行等价,不影响 T8

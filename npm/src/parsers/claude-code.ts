@@ -115,7 +115,9 @@ function toEvent(
 // Python json.dumps defaults: separators (", ", ": ") and ensure_ascii=True
 // (non-ASCII escaped as \uXXXX). JSON.stringify emits neither, which would
 // make args_hint evidence differ from the Python implementation.
-function pyJsonDumps(v: unknown): string {
+// Also reused by demo.ts, whose output file must be byte-identical to the
+// Python demo's json.dumps records.
+export function pyJsonDumps(v: unknown): string {
   if (v === null) return "null";
   if (typeof v === "string") {
     return JSON.stringify(v).replace(
