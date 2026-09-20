@@ -39,6 +39,18 @@ function colorSev(text: string, sev: Severity): string {
 // Python: _SEV_ORDERED = list(reversed(SEVERITY_ORDER))  # critical -> info
 const SEV_ORDERED: readonly Severity[] = [...SEVERITY_ORDER].reverse();
 
+// Python datetime.isoformat() for tz-aware UTC values: "+00:00" offset,
+// microseconds included only when nonzero (6 digits). Parsed timestamps are
+// always UTC-normalized (Z inputs), so a UTC formatter is exact.
+function pyIso(d: Date): string {
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  const base =
+    `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}` +
+    `T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  const us = d.getUTCMilliseconds() * 1000;
+  return us ? `${base}.${p(us, 6)}+00:00` : `${base}+00:00`;
+}
+
 export function severityCounts(findings: Finding[]): Record<Severity, number> {
   // zero-fill all five severities in critical->info order so the object is
   // directly JSON-serializable as Python's by_severity (insertion order kept)
@@ -207,9 +219,10 @@ export function toDict(result: AuditResult): ReportDict {
         evidence: f.evidence,
         project: f.event.project,
         session_id: f.event.sessionId,
-        // Python: f.event.timestamp.isoformat() — Z-inputs serialize
-        // identically via toISOString (naive-input divergence is ledger F)
-        timestamp: f.event.timestamp ? f.event.timestamp.toISOString() : null,
+        // Python: datetime.isoformat() emits "+00:00" offsets and omits
+        // microseconds when zero — NOT what toISOString() produces ("Z",
+        // always ".000"). pyIso mirrors it for byte-identical JSON output.
+        timestamp: f.event.timestamp ? pyIso(f.event.timestamp) : null,
         explanation: f.explanation,
         recommendation: f.recommendation,
       }),

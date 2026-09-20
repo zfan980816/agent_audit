@@ -66,6 +66,9 @@ test("to dict roundtrip", async () => {
   expect(["critical", "high", "medium", "low", "info"]).toContain(
     data.findings[0].severity,
   );
+  // Python datetime.isoformat() format, not toISOString(): "+00:00" offset,
+  // zero milliseconds omitted (makeResult uses .000Z timestamps)
+  expect(data.findings[0].timestamp).toBe("2026-09-19T10:00:00+00:00");
 });
 
 test("toDict emits Python key order (T8 gate)", async () => {
