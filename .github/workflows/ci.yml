@@ -15,3 +15,18 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
       - run: pytest -q
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: npm/package-lock.json
+      - run: npm --prefix npm ci
+      - run: npm --prefix npm test
+      - run: npm --prefix npm run build
+      - name: Demo JSON smoke
+        run: node npm/dist/cli.js --demo --json | node -e "JSON.parse(require('fs').readFileSync(0,'utf8'))"

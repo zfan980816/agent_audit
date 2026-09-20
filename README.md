@@ -38,17 +38,20 @@ were disclosed. Nobody reviews what their agent already did — until now.
 
 ## Install & usage
 
-Requires Python 3.10+.
+Requires Node 18+.
 
 ```bash
-pipx install agent-audit   # or: uvx agent-audit (no install)
-agentaudit                # audit default location
-agentaudit ~/somewhere    # audit a custom projects dir / .jsonl file
-agentaudit --json         # machine-readable output
-agentaudit --severity high --rules E,C
-agentaudit --session <id> # one session only
-agentaudit --share        # print a shareable summary card
+npx agent-audit            # run without installing, or: npm i -g agent-audit
+agent-audit                # audit default location
+agent-audit ~/somewhere    # audit a custom projects dir / .jsonl file
+agent-audit --json         # machine-readable output
+agent-audit --severity high --rules E,C
+agent-audit --session <id> # one session only
+agent-audit --share        # print a shareable summary card
 ```
+
+Python 3.10+ alternative: `uvx agent-audit` (no install) or
+`pipx install agent-audit` (command name: `agentaudit`).
 
 - 100% local parsing. No network calls, no telemetry, ever.
 - Works on Windows, macOS and Linux.
@@ -56,9 +59,18 @@ agentaudit --share        # print a shareable summary card
 Exit codes: `0` on success (findings do NOT change the exit code yet — a
 `--fail-on` flag is planned for v0.2), `2` on bad options or missing data dir.
 
+## Implementation note
+
+v0.2 rewrote agent-audit in TypeScript as the canonical implementation
+(`npm/`) — byte-for-byte equivalent to the Python original, verified by an
+automated equivalence harness on the demo, boundary corpora, and real session
+data. The Python implementation (`src/agentaudit`) is frozen at v0.1.1 as the
+porting reference and spec.
+
 ## Roadmap
 
-- v0.2: Codex CLI / Gemini CLI parsers, SARIF export
+- v0.2: done — TypeScript/npm canonical port (byte-for-byte equivalent to the Python original)
+- v0.2.x: Codex CLI / Gemini CLI parsers, SARIF export
 - v0.3: guard mode — block dangerous actions before they run (PreToolUse hooks)
 
 ## License

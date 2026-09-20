@@ -23,23 +23,34 @@ agentaudit --demo       # 没装 Claude Code?跑内置演示
 
 ## 安装与使用
 
-需要 Python 3.10+。
+需要 Node 18+。
 
 ```bash
-pipx install agent-audit
-agentaudit              # 审计默认目录
-agentaudit --json       # 机器可读输出
-agentaudit --share      # 输出可分享的摘要卡
+npx agent-audit           # 免安装直接运行,或:npm i -g agent-audit
+agent-audit               # 审计默认目录
+agent-audit ~/somewhere   # 审计自定义 projects 目录 / .jsonl 文件
+agent-audit --json        # 机器可读输出
+agent-audit --severity high --rules E,C
+agent-audit --session <id> # 仅审计单个会话
+agent-audit --share       # 输出可分享的摘要卡
 ```
+
+Python 3.10+ 备选:`uvx agent-audit`(免安装)或 `pipx install agent-audit`
+(命令名:`agentaudit`)。
 
 - 100% 本地解析,永不联网,无遥测
 - Windows / macOS / Linux 全支持(Windows 优先测试)
 
 退出码:成功为 `0`(发现项不影响退出码——`--fail-on` 计划于 v0.2),参数错误或数据目录缺失为 `2`。
 
+## 实现说明
+
+v0.2 用 TypeScript 重写了本工具(`npm/`)作为规范实现——与 Python 原版逐字节等价,由自动化等价性校验在 demo、边界语料与真实会话数据上验证。Python 实现(`src/agentaudit`)定格于 v0.1.1,作为移植参照与规格。
+
 ## 路线图
 
-- v0.2:支持 Codex CLI / Gemini CLI,SARIF 导出
+- v0.2:已完成——TypeScript/npm 规范移植(与 Python 原版逐字节等价)
+- v0.2.x:支持 Codex CLI / Gemini CLI,SARIF 导出
 - v0.3:guard 模式——在危险操作执行前拦截(PreToolUse hook)
 
 ## 许可
