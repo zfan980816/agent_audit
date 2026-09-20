@@ -133,3 +133,37 @@ test("missing file rejects with fs error", async () => {
   expect(caught).not.toBeNull();
   expect(caught?.code).toBe("ENOENT");
 });
+
+// args_hint must match Python json.dumps defaults byte-for-byte:
+// separators (", ", ": ") and ensure_ascii (non-ASCII → \uXXXX).
+test("mcp args_hint uses Python json.dumps formatting", async () => {
+  const dir = makeTmpDir();
+  const p = join(dir, "m.jsonl");
+  writeJsonl(p, [
+    makeToolLine("mcp__serv__tool", { title: "t", n: 1, nested: { k: "v" } }),
+    makeToolLine("mcp__serv__tool2", { zh: "中文" }),
+  ]);
+  const { events } = await collect(p);
+  expect(events[0]).toBeInstanceOf(McpToolCall);
+  const mcp = events[0] as McpToolCall;
+  expect(mcp.argsHint).toBe('{"title": "t", "n": 1, "nested": {"k": "v"}}');
+  expect((events[1] as McpToolCall).argsHint).toBe('{"zh": "\\u4e2d\\u6587"}');
+});
+
+// fallback_project = parent dir BASENAME (dots preserved), not stem.
+test("dotted parent dir name kept as fallback project", async () => {
+  const dir = makeTmpDir();
+  const dotted = join(dir, "D--my.proj.v2");
+  mkdirSync(dotted, { recursive: true });
+  const p = join(dotted, "f.jsonl");
+  writeJsonl(p, [
+    {
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }],
+      },
+    },
+  ]);
+  const { events } = await collect(p);
+  expect(events[0]?.project).toBe("D--my.proj.v2");
+});

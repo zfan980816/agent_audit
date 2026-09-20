@@ -99,10 +99,30 @@ function toEvent(
     }
     return new McpToolCall(
       sid, project, ts, server, tool,
-      JSON.stringify(inp).slice(0, 200),
+      pyJsonDumps(inp).slice(0, 200),
     );
   }
   return null;
+}
+
+// Python json.dumps defaults: separators (", ", ": ") and ensure_ascii=True
+// (non-ASCII escaped as \uXXXX). JSON.stringify emits neither, which would
+// make args_hint evidence differ from the Python implementation.
+function pyJsonDumps(v: unknown): string {
+  if (v === null) return "null";
+  if (typeof v === "string") {
+    return JSON.stringify(v).replace(
+      /[\u007f-￿]/g,
+      (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
+    );
+  }
+  if (Array.isArray(v)) return "[" + v.map(pyJsonDumps).join(", ") + "]";
+  if (typeof v === "object") {
+    const entries = Object.entries(v as Record<string, unknown>)
+      .map(([k, val]) => JSON.stringify(k) + ": " + pyJsonDumps(val));
+    return "{" + entries.join(", ") + "}";
+  }
+  return JSON.stringify(v); // numbers, booleans
 }
 
 // Python iter_events as an async generator: readline over a UTF-8 stream
@@ -113,8 +133,9 @@ export async function* iterEvents(
   path: string,
   stats: ParseStats = new ParseStats(),
 ): AsyncGenerator<Event> {
-  // Python: fallback_project = path.parent.name; fallback_session = path.stem
-  const fallbackProject = stem(dirname(path));
+  // Python: fallback_project = path.parent.name (basename, NOT stem — dotted
+  // dir names keep their dots); fallback_session = path.stem
+  const fallbackProject = basename(dirname(path));
   const fallbackSession = stem(path);
   const input = createReadStream(path, { encoding: "utf8" });
   const rl = createInterface({ input, crlfDelay: Infinity });
