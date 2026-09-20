@@ -68,6 +68,10 @@ class E005(Rule):
 
     The engine constructs fresh rule instances per run (all_rules() factory),
     so this dict never outlives one scan.
+
+    By design, a combined one-liner ("zip ... && curl -F file=@out.zip ...") is
+    treated as archive-create only: it stores the artifact and fires on a LATER
+    separate upload event, never on the create event itself.
     """
 
     id = "E005"
