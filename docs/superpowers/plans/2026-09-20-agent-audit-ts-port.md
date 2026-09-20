@@ -110,3 +110,5 @@
 - **浮点数 args_hint**:Python `1.0` 输出 `1.0`、JS 输出 `1`(工具入参几乎全为整数/字符串)
 - **H·目录 junction**:Python rglob 跟随、TS 跳过(exotic)
 - **I·Unicode 词边界**:Python `\w/\b` Unicode 感知,JS 仅 ASCII——非 ASCII 字母与词字符邻接时判定可分叉(如 `caté .env` Python 漏/TS 中;证据截断点亦可偏移)。仅怪异输入触发,TS 偏向误报不漏报;T8 语料避免非 ASCII 命令字符紧邻模式锚点
+- **J·`\s` 类成员差**:Python `\s` 含 `\x1c-\x1f`/`\x85`(不含 `\xa0`),JS 相反(含 ` `/`﻿`)——仅控制字符/奇 Unicode 输入的 `\s` 锚点处可分叉,同 I 族
+- **K·B001 `$` 尾换行**:Python `$` 接受串尾 `\n`,JS 不——basename 内含换行的路径(B001)可分叉,exotic
