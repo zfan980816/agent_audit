@@ -18,6 +18,7 @@ import {
   ParseStats,
   iterEvents as iterClaudeEvents,
 } from "./parsers/claude-code.js";
+import { iterEvents as iterCodexEvents } from "./parsers/codex.js";
 import { iterEvents as iterKimiEvents } from "./parsers/kimi.js";
 
 export interface AgentParser {
@@ -78,6 +79,51 @@ function findKimiSessionFiles(root?: string | null): string[] {
   return out.sort(comparePaths);
 }
 
+// Codex CLI session store (format ground truth:
+// docs/superpowers/research/2026-09-20-codex-format.md):
+//   ~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<compact-ts>-<thread-uuid>.jsonl
+//   + fork names rollout-<ts>-<thread-uuid>_<rollout-id>.jsonl
+// Newer builds may compress cold rollouts to .jsonl.zst; v0.2.x does not
+// decompress zstd, so discovery EXCLUDES them (the parser would only see
+// binary garbage — better than counting unparseable files).
+export function defaultCodexSessionsDir(): string {
+  // Python parity with discovery.default_claude_projects_dir: Path.home()/...
+  return join(homedir(), ".codex", "sessions");
+}
+
+// rglob("*.jsonl") over the sessions tree — same case-sensitive suffix rule
+// and no-symlink-follow as discovery.walk (the YYYY/MM/DD nesting makes an
+// exact-shape walk pointless; rollout files only live under sessions/).
+// Missing root -> empty list (silent skip), NOT an error (optional agent).
+function findCodexSessionFiles(root?: string | null): string[] {
+  const base = root || defaultCodexSessionsDir();
+  if (!existsSync(base)) {
+    return [];
+  }
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      // racy removal / permission error: best-effort, like kimi discovery
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!entry.isSymbolicLink()) {
+          walk(full);
+        }
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        out.push(full); // .jsonl.zst does NOT end in .jsonl — excluded here
+      }
+    }
+  };
+  walk(base);
+  return out.sort(comparePaths);
+}
+
 export const AGENTS: Record<string, AgentDescriptor> = {
   "claude-code": {
     id: "claude-code",
@@ -90,6 +136,12 @@ export const AGENTS: Record<string, AgentDescriptor> = {
     displayName: "Kimi Code",
     find: (root?: string) => findKimiSessionFiles(root),
     parser: { iterEvents: (path: string, stats?: ParseStats) => iterKimiEvents(path, stats) },
+  },
+  codex: {
+    id: "codex",
+    displayName: "Codex CLI",
+    find: (root?: string) => findCodexSessionFiles(root),
+    parser: { iterEvents: (path: string, stats?: ParseStats) => iterCodexEvents(path, stats) },
   },
 };
 

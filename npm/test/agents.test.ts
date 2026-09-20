@@ -15,12 +15,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-test("registry exposes claude-code and kimi with parsers", () => {
-  expect(Object.keys(AGENTS).sort()).toEqual(["claude-code", "kimi"]);
+test("registry exposes claude-code, kimi and codex with parsers", () => {
+  expect(Object.keys(AGENTS).sort()).toEqual(["claude-code", "codex", "kimi"]);
   expect(AGENTS["claude-code"].displayName).toBeTruthy();
   expect(AGENTS["kimi"].displayName).toBeTruthy();
+  expect(AGENTS["codex"].displayName).toBe("Codex CLI");
   expect(typeof AGENTS["claude-code"].parser.iterEvents).toBe("function");
   expect(typeof AGENTS["kimi"].parser.iterEvents).toBe("function");
+  expect(typeof AGENTS["codex"].parser.iterEvents).toBe("function");
 });
 
 test("kimi find walks wd_*/session_*/agents/main/wire.jsonl under a root", () => {

@@ -86,8 +86,11 @@ test("default --agent all covers every registered agent", async () => {
   const code = await main([root, "--json"], io);
   expect(code).toBe(0);
   const data = JSON.parse(io.out());
-  expect(data.summary.by_agent).toEqual({ "claude-code": 2, kimi: 1 });
-  expect(io.err()).toContain(`scanning 3 session file(s)`);
+  // codex discovery rglobs *.jsonl, so under a SHARED explicit root it also
+  // counts both jsonl files (disjoint on real default roots) — its parser
+  // extracts nothing from claude/kimi records, so no findings leak.
+  expect(data.summary.by_agent).toEqual({ "claude-code": 2, kimi: 1, codex: 2 });
+  expect(io.err()).toContain(`scanning 5 session file(s)`);
 });
 
 test("unknown agent id exits 2 naming the known agents", async () => {
