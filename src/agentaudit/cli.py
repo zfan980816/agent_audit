@@ -83,6 +83,8 @@ def audit(
             except DataDirNotFound as exc:
                 err_console.print(f"[red]error:[/red] {exc}")
                 raise typer.Exit(code=2) from None
+        # stderr keeps --json stdout pure; real dirs can take ~10s before output
+        err_console.print(f"scanning {len(files)} session file(s)...")
         result = run_audit(files, rule_prefixes=prefixes, session_id=session)
 
     # (ADJUSTMENT B) severity floor applies to BOTH terminal and JSON modes
@@ -100,6 +102,7 @@ def audit(
                       markup=False, highlight=False, soft_wrap=True)
     else:
         render_terminal(result, floor=floor)
-    if share:
+    if share and not json_out:
+        # card would corrupt the machine-readable JSON stream on stdout
         console.print()
         console.print(share_card(result))
