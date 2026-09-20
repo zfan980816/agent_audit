@@ -43,9 +43,30 @@ export function findSessionFiles(root?: string | null): string[] {
     );
   }
   // Python: sorted(p for p in root.rglob("*.jsonl") if p.is_file())
-  // Plain lexicographic string sort — deterministic, and matches the
-  // Path-object sort on every case the tests exercise.
   const files: string[] = [];
   walk(base, files);
-  return files.sort();
+  return files.sort(comparePaths);
+}
+
+// Python sorted(paths) orders pathlib.Path objects element-wise over the
+// os.path.normcase()-folded parts (`_parts_normcase`, py3.12+; `_cparts` on
+// <=3.11): lowercased on win32, identity on POSIX; prefix-shorter-first.
+// This is NOT a joined-string sort: "p/uuid.jsonl" vs "p/uuid/subagents/
+// a.jsonl" flips ("." < "\" on the string, prefix rule on the parts) and
+// case-folded "C--"/"c--" dirs interleave. Real Claude Code data contains
+// both shapes (T8 real-data gate regression).
+function comparePaths(a: string, b: string): number {
+  const fold =
+    process.platform === "win32"
+      ? (s: string) => s.toLowerCase()
+      : (s: string) => s;
+  const A = a.split(/[\\/]/).map(fold);
+  const B = b.split(/[\\/]/).map(fold);
+  const n = Math.min(A.length, B.length);
+  for (let i = 0; i < n; i++) {
+    if (A[i] !== B[i]) {
+      return A[i] < B[i] ? -1 : 1;
+    }
+  }
+  return A.length - B.length;
 }
