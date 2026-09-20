@@ -15,6 +15,7 @@ from agentaudit.rules.base import Finding
 class AuditResult:
     findings: list[Finding] = field(default_factory=list)
     files_scanned: int = 0
+    files_failed: int = 0
     lines_total: int = 0
     lines_skipped: int = 0
     events: int = 0
@@ -29,16 +30,22 @@ def run_audit(files: Iterable[Path], rule_prefixes: set[str] | None = None,
     stats = ParseStats()
     for path in files:
         result.files_scanned += 1
-        for event in iter_events(path, stats):
-            if session_id is not None and event.session_id != session_id:
-                continue
-            result.sessions.add(event.session_id)
-            for rule in rules:
-                if not isinstance(event, rule.applies_to):
+        try:
+            event_iter = iter_events(path, stats)
+            for event in event_iter:
+                if session_id is not None and event.session_id != session_id:
                     continue
-                finding = rule.check(event)
-                if finding is not None:
-                    result.findings.append(finding)
+                result.sessions.add(event.session_id)
+                for rule in rules:
+                    if not isinstance(event, rule.applies_to):
+                        continue
+                    finding = rule.check(event)
+                    if finding is not None:
+                        result.findings.append(finding)
+        except OSError:
+            # unreadable file (deleted mid-run, AV/indexer lock, permissions):
+            # count loudly instead of aborting the whole audit
+            result.files_failed += 1
     result.lines_total = stats.lines_total
     result.lines_skipped = stats.lines_skipped
     result.events = stats.events
