@@ -81,7 +81,7 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
     .option("--list-rules", "List all rules and exit")
     .option(
       "--agent <ids>",
-      "Agents to audit, comma separated: claude-code|kimi|all",
+      "Agents to audit, comma separated: claude-code|kimi|codex|zcode|all",
       "all",
     )
     .option("--list-agents", "List known agents and exit")

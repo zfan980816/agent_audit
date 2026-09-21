@@ -36,7 +36,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { cp, mkdtemp, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -114,10 +115,14 @@ function runOnce(cmd, args, env, timeoutMs = RUN_TIMEOUT_MS) {
 }
 
 // Python side: `uv run agentaudit` from the repo root (v0.1.1 typer CLI, the
-// spec). TS side: the built dist CLI (v0.2.0 commander port).
+// spec). TS side: the built dist CLI (v0.2.x commander port), pinned to
+// --agent claude-code: the parity gate compares the v0.1 surface, and the
+// TS default became `--agent all` once kimi/codex/zcode adapters landed
+// (Python knows nothing about those stores — 962 vs 481 files is expected
+// multi-agent growth, NOT a regression).
 const runPy = (args) => runOnce("uv", ["run", "agentaudit", ...args], PY_ENV);
 const runTs = (args) =>
-  runOnce(process.execPath, [TS_CLI, ...args], TS_ENV);
+  runOnce(process.execPath, [TS_CLI, "--agent", "claude-code", ...args], TS_ENV);
 
 // ledger N: CRLF -> LF before any comparison
 const crNormalize = (buf) => buf.toString("utf8").replace(/\r\n/g, "\n");
@@ -648,32 +653,35 @@ const summariesEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 async function realGates() {
   const results = [];
 
-  // ---- R1: live default dir, no path argument ----
+  // ---- R1: live default dir, FROZEN before comparing ----
+  // The live dir is being written while we audit it (this very session lives
+  // there), so py and ts runs seconds apart see different data. Freeze a
+  // fresh copy first, then byte-compare both sides against the SAME bytes —
+  // same discipline as R2, but with a current snapshot.
   {
-    const py = await runPy(["--json"]);
-    const ts = await runTs(["--json"]);
+    const liveRoot = resolve(homedir(), ".claude", "projects");
+    const snap = await mkdtemp(join(tmpdir(), "agentaudit-equiv-r1-"));
+    await cp(liveRoot, snap, { recursive: true });
+    const args = [snap, "--json"];
+    const py = await runPy(args);
+    const ts = await runTs(args);
     const pyOut = crNormalize(py.stdout);
     const tsOut = parityNormalize(crNormalize(ts.stdout));
-    const pyS = summarize("py", pyOut);
-    const tsS = summarize("ts", tsOut);
     const exitOk = py.code === ts.code;
-    const sumsOk = pyS !== null && tsS !== null && summariesEqual(pyS, tsS);
     const byteEqual = pyOut === tsOut;
     console.log(
-      `\n[real R1: default dir, no path arg (LIVE data)]\n` +
-        `  args: agentaudit --json\n` +
+      `\n[real R1: default dir, freshly frozen copy (live data)]\n` +
+        `  args: agentaudit <snapshot> --json  (both sides audit the same copied bytes)\n` +
         `  exit: py ${py.code} / ts ${ts.code}\n` +
         `  bytes (CR-normalized): py ${pyOut.length} / ts ${tsOut.length}\n` +
         `  stdout bytes: ${byteEqual ? "BYTE-EQUAL" : "DIFF"}\n` +
-        `  verdict: ${
-          byteEqual
-            ? "BYTE-EQUAL"
-            : exitOk && sumsOk
-              ? "PASS (summaries equal; byte DIFF attributed to live-data drift, see R2 for the byte gate)"
-              : "FAIL (exit codes or summaries differ)"
-        }`,
+        `  verdict: ${byteEqual && exitOk ? "BYTE-EQUAL" : "DIFF"}`,
     );
-    results.push({ name: "real R1 (default dir)", pass: exitOk && sumsOk });
+    if (!byteEqual) {
+      console.log(`  diff: ${firstDiffLines(pyOut, tsOut)}`);
+    }
+    results.push({ name: "real R1 (fresh frozen copy)", pass: byteEqual && exitOk });
+    await rm(snap, { recursive: true, force: true });
   }
 
   // ---- R2: frozen snapshot, byte-level gate ----
