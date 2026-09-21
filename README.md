@@ -48,6 +48,7 @@ agent-audit --json         # machine-readable output
 agent-audit --severity high --rules E,C
 agent-audit --session <id> # one session only
 agent-audit --share        # print a shareable summary card
+agent-audit --watch        # LIVE egress monitor (Windows; see below)
 ```
 
 Python 3.10+ alternative: `uvx agent-audit` (no install) or
@@ -55,6 +56,34 @@ Python 3.10+ alternative: `uvx agent-audit` (no install) or
 
 - 100% local parsing. No network calls, no telemetry, ever.
 - Works on Windows, macOS and Linux.
+
+## Watch mode (v0.2.x, Windows only)
+
+Besides auditing history, agent-audit can also watch what your AI coding
+tools are connecting to RIGHT NOW: it polls the TCP table every ~0.7s for the
+watched processes' established connections, labels each target against a
+built-in registry of known-agent domains (`model-api` / `telemetry` /
+`update` / `captcha` / `community`), and alerts on anything outside it.
+
+```bash
+agent-audit --watch                          # watch all known AI tools, 60s
+agent-audit --watch --proc ZCode,QoderCN     # specific processes (no .exe)
+agent-audit --watch --seconds 300 --csv out.csv   # record to CSV
+```
+
+```
+[10:13:37] claude(11852) → 160.79.104.10:443 api.anthropic.com (model-api)
+[!] [10:13:37] claude(11852) → 47.96.134.91:443 (unknown — no DNS mapping observed)
+──── agent-audit watch ────
+watched 14s · procs 3 · polls 5 · new connections 3 · dns entries 11
+by category: model-api 1 · unknown 2
+[!] unknown targets: 47.96.134.91:443 (claude)
+```
+
+Hostnames come from the Windows DNS cache sampled during the watch — an IP
+that never resolves there is reported as unknown, never guessed. Ctrl+C stops
+early and still prints the summary. On non-Windows platforms `--watch` exits
+with code 2 (`watch: Windows-only in v0.2.x`).
 
 Exit codes: `0` on success (findings do NOT change the exit code yet — a
 `--fail-on` flag is planned), `2` on bad options or missing data dir.

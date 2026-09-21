@@ -33,6 +33,7 @@ agent-audit --json        # 机器可读输出
 agent-audit --severity high --rules E,C
 agent-audit --session <id> # 仅审计单个会话
 agent-audit --share       # 输出可分享的摘要卡
+agent-audit --watch       # 实时出网监视(Windows;见下文)
 ```
 
 Python 3.10+ 备选:`uvx agent-audit`(免安装)或 `pipx install agent-audit`
@@ -42,6 +43,32 @@ Python 3.10+ 备选:`uvx agent-audit`(免安装)或 `pipx install agent-audit`
 - Windows / macOS / Linux 全支持(Windows 优先测试)
 
 退出码:成功为 `0`(发现项不影响退出码——`--fail-on` 计划中),参数错误或数据目录缺失为 `2`。
+
+## Watch 模式(v0.2.x,仅 Windows)
+
+除了审计历史记录,agent-audit 还能监视 AI 编码工具**此刻**连到哪里:每
+约 0.7 秒轮询一次 TCP 表,抓取被监视进程的已建立连接,按内置的已知
+agent 域名注册表(`model-api` / `telemetry` / `update` / `captcha` /
+`community`)标注每个目标,白名单之外的新目标即时告警 `[!]`。
+
+```bash
+agent-audit --watch                          # 监视所有已知 AI 工具,60 秒
+agent-audit --watch --proc ZCode,QoderCN     # 指定进程名(不带 .exe)
+agent-audit --watch --seconds 300 --csv out.csv   # 记录到 CSV
+```
+
+```
+[10:13:37] claude(11852) → 160.79.104.10:443 api.anthropic.com (model-api)
+[!] [10:13:37] claude(11852) → 47.96.134.91:443 (unknown — no DNS mapping observed)
+──── agent-audit watch ────
+watched 14s · procs 3 · polls 5 · new connections 3 · dns entries 11
+by category: model-api 1 · unknown 2
+[!] unknown targets: 47.96.134.91:443 (claude)
+```
+
+主机名来自监视窗口内采样的 Windows DNS 缓存——期间从未解析过的 IP 如实
+上报为 unknown,绝不按 IP 段猜测。Ctrl+C 提前停止时同样输出摘要。非
+Windows 平台上 `--watch` 以退出码 2 结束(`watch: Windows-only in v0.2.x`)。
 
 ## 实现说明
 

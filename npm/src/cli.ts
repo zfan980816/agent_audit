@@ -23,6 +23,16 @@ import { SEVERITY_ORDER, type Severity } from "./events.js";
 import type { WriteFn } from "./report.js";
 import { SEV_LABEL, renderTerminal, shareCard, toDict } from "./report.js";
 import { CATEGORY_TITLES, allRules } from "./rules/index.js";
+import { defaultWatchDeps } from "./watch-poller.js";
+import {
+  DEFAULT_WATCH_PROCS,
+  WATCH_DEFAULT_SECONDS,
+  WatchUnsupportedError,
+  parseWatchProcs,
+  renderWatchSummary,
+  runWatch,
+  type WatchDeps,
+} from "./watch.js";
 
 // Keep in sync with npm/package.json "version" (importing package.json would
 // need JSON import attributes, which Node 18 does not support).
@@ -31,6 +41,9 @@ export const VERSION = "0.2.0";
 export interface MainIo {
   stdout?: WriteFn;
   stderr?: WriteFn;
+  // M5 test seam: partial override of the watch deps (poll/now/sleep/...)
+  // so CLI tests never spawn powershell. CLI-only; audit ignores it.
+  watchDeps?: Partial<WatchDeps>;
 }
 
 // camelCased commander view of the audit flags
@@ -45,6 +58,11 @@ interface AuditFlags {
   share?: boolean;
   demo?: boolean;
   version?: boolean;
+  // M5 watch mode (TS-only, Windows-first)
+  watch?: boolean;
+  proc?: string;
+  seconds?: string;
+  csv?: string;
 }
 
 const description =
@@ -87,9 +105,29 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
     .option("--list-agents", "List known agents and exit")
     .option("--share", "Print a shareable summary card")
     .option("--demo", "Run on built-in demo data")
+    // M5 watch mode: live per-process TCP egress monitoring (Windows only
+    // in v0.2.x; watch is a MODE on the single-command CLI, not a
+    // subcommand). Audit flags are ignored in watch mode and vice versa.
+    .option("--watch", "Watch AI-tool processes' live TCP egress (Windows only)")
+    .option(
+      "--proc <names>",
+      "Watch: process names, comma separated (.exe stripped); default: all known AI tools",
+    )
+    .option(
+      "--seconds <n>",
+      "Watch: how long to poll, seconds",
+      String(WATCH_DEFAULT_SECONDS),
+    )
+    .option("--csv <path>", "Watch: append one CSV row per new connection")
     .option("--version", "Show version")
     .action(async (pathArg: string | undefined, opts: OptionValues) => {
-      exitCode = await auditCommand(pathArg, opts as AuditFlags, stdout, stderr);
+      exitCode = await auditCommand(
+        pathArg,
+        opts as AuditFlags,
+        stdout,
+        stderr,
+        io.watchDeps,
+      );
     });
 
   try {
@@ -112,10 +150,20 @@ async function auditCommand(
   opts: AuditFlags,
   stdout: WriteFn,
   stderr: WriteFn,
+  watchInject?: Partial<WatchDeps>,
 ): Promise<number> {
   if (opts.version) {
     stdout(`agent-audit ${VERSION}\n`);
     return 0;
+  }
+
+  // M5: watch is a mode on this command; audit flags below do not apply.
+  if (opts.watch) {
+    return watchCommand(opts, stdout, stderr, watchInject);
+  }
+  if (opts.proc !== undefined || opts.csv !== undefined) {
+    // common typo guard: --proc/--csv silently doing nothing would confuse
+    stderr("note: --proc/--seconds/--csv apply to --watch mode; ignored\n");
   }
 
   if (opts.listRules) {
@@ -278,6 +326,62 @@ async function auditCommand(
     stdout(`${shareCard(result)}\n`);
   }
   return 0;
+}
+
+// M5 watch mode: poll Get-NetTCPConnection via a PowerShell child once per
+// ~700ms, label targets against the domain registry, print a live line per
+// NEW connection, a summary at the end (and on Ctrl+C), append CSV rows.
+// Windows-only in v0.2.x — anything else exits 2 with the reason.
+async function watchCommand(
+  opts: AuditFlags,
+  stdout: WriteFn,
+  stderr: WriteFn,
+  inject?: Partial<WatchDeps>,
+): Promise<number> {
+  // default list = every known AI-tool process name; --proc replaces it
+  const procs =
+    opts.proc !== undefined ? parseWatchProcs(opts.proc) : [...DEFAULT_WATCH_PROCS];
+  if (procs.length === 0) {
+    stderr("error: --proc must name at least one process (comma separated)\n");
+    return 2;
+  }
+  const seconds = Number(opts.seconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    stderr(`error: --seconds must be a positive number (got "${opts.seconds}")\n`);
+    return 2;
+  }
+
+  const deps: WatchDeps = {
+    ...defaultWatchDeps(),
+    // live lines go through the SAME injected writer as everything else
+    writeLine: (line) => stdout(`${line}\n`),
+    ...(inject ?? {}),
+  };
+  // Ctrl+C: abort the watch, runWatch returns the partial result and the
+  // summary below still prints (same output as a natural end).
+  const controller = new AbortController();
+  const onSigint = () => controller.abort();
+  process.on("SIGINT", onSigint);
+  try {
+    stdout(
+      `watching ${procs.join(", ")} for ${seconds}s (Ctrl+C to stop) — ` +
+        "unknown targets are flagged [!]\n",
+    );
+    const result = await runWatch(
+      { procs, seconds, csvPath: opts.csv, signal: controller.signal },
+      deps,
+    );
+    stdout(renderWatchSummary(result, opts.csv));
+    return 0;
+  } catch (err) {
+    if (err instanceof WatchUnsupportedError) {
+      stderr(`${err.message}\n`);
+      return 2;
+    }
+    throw err;
+  } finally {
+    process.removeListener("SIGINT", onSigint);
+  }
 }
 
 // Bin wiring: run only when invoked directly as `node dist/cli.js` (or via the
