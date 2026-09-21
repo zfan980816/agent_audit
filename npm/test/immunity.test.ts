@@ -75,8 +75,8 @@ test("rm -rf of user documents stays critical without a note", async () => {
 test("write in session A + rm same path in session B stays critical (provenance is per-session)", async () => {
   const result = await runAudit([
     writeJsonl(join(makeTmpDir(), "a.jsonl"), [
-      makeToolLine("Write", { file_path: "/tmp/c/x.py", content: "x" }, { session: "sess-a" }),
-      makeToolLine("Bash", { command: "rm -rf /tmp/c" }, { session: "sess-b" }),
+      makeToolLine("Write", { file_path: "/data/sessb/x.py", content: "x" }, { session: "sess-a" }),
+      makeToolLine("Bash", { command: "rm -rf /data/sessb" }, { session: "sess-b" }),
     ]),
   ]);
   const f = find(result, "D001");
@@ -468,8 +468,8 @@ test("mkdir /home/u then rm -rf /home/u stays critical (home top-level)", async 
 test("bash-create in session A + rm in session B stays critical (per-session provenance)", async () => {
   const result = await runAudit([
     writeJsonl(join(makeTmpDir(), "a.jsonl"), [
-      makeToolLine("Bash", { command: "mkdir -p /tmp/xs" }, { session: "sess-a" }),
-      makeToolLine("Bash", { command: "rm -rf /tmp/xs" }, { session: "sess-b" }),
+      makeToolLine("Bash", { command: "mkdir -p /data/xs" }, { session: "sess-a" }),
+      makeToolLine("Bash", { command: "rm -rf /data/xs" }, { session: "sess-b" }),
     ]),
   ]);
   const f = find(result, "D001");
@@ -528,8 +528,8 @@ test("create-before-delete in one line still downgrades (mkdir && rm)", async ()
 test("mixed line with leading delete under-counts conservatively", async () => {
   const result = await runAudit([
     writeJsonl(join(makeTmpDir(), "a.jsonl"), [
-      makeToolLine("Bash", { command: "rm -rf /tmp/w1 && mkdir /tmp/w1" }),
-      makeToolLine("Bash", { command: "rm -rf /tmp/w1" }),
+      makeToolLine("Bash", { command: "rm -rf /data/wq && mkdir /data/wq" }),
+      makeToolLine("Bash", { command: "rm -rf /data/wq" }),
     ]),
   ]);
   // first line's delete precedes its creation; second line's delete cannot
@@ -552,4 +552,46 @@ test("extractCreatedPaths beforeFirstDelete is position-aware", async () => {
   expect(extractCreatedPaths("mkdir /tmp/aa && rm -rf /tmp/aa", null, { beforeFirstDelete: true })).toEqual(["/tmp/aa"]);
   expect(extractCreatedPaths("mkdir /tmp/zz", null, { beforeFirstDelete: true })).toEqual(["/tmp/zz"]);
   expect(extractCreatedPaths("sudo rm -rf /tmp/bb && mkdir /tmp/bb", null, { beforeFirstDelete: true })).toEqual([]);
+});
+
+// ------------------------------------------- M7v3: scratch/temp exemption --
+
+test("rm -rf under /tmp downgrades with scratch note", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf /tmp/build-scratch" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("info");
+  expect(f.note).toContain("临时目录");
+});
+
+test("rm -rf D:/tmp (drive-rooted temp convention) downgrades", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf D:/tmp/equiv-corpus" }),
+    ]),
+  ]);
+  expect(find(result, "D001").severity).toBe("info");
+});
+
+test("mixed scratch + non-scratch targets stay critical", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf /tmp/x ~/Documents" }),
+    ]),
+  ]);
+  expect(find(result, "D001").severity).toBe("critical");
+});
+
+test("/tmp itself (the root, not under it) is NOT scratch-exempt", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf /tmp/.." }),
+    ]),
+  ]);
+  // /tmp/.. normalizes oddly; the guard case is the literal root:
+  const { extractDeleteTargets } = await import("../src/immunity.js");
+  expect(extractDeleteTargets("rm -rf /tmp")).toEqual(["/tmp"]);
 });

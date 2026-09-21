@@ -18,7 +18,7 @@ import { makeToolLine, makeTmpDir, writeJsonl } from "./helpers.js";
 async function makeResult(): Promise<AuditResult> {
   return runAudit([
     writeJsonl(join(makeTmpDir(), "a.jsonl"), [
-      makeToolLine("Bash", { command: "rm -rf /tmp/x" }),
+      makeToolLine("Bash", { command: "rm -rf /data/report-x" }),
       makeToolLine("Bash", { command: "sudo apt install x" }),
       makeToolLine("Bash", { command: "ls -la" }),
     ]),

@@ -10,7 +10,7 @@ import { makeToolLine, makeTmpDir, writeJsonl } from "./helpers.js";
 
 function build(tmpDir: string): string[] {
   const f1 = writeJsonl(join(tmpDir, "a.jsonl"), [
-    makeToolLine("Bash", { command: "rm -rf /tmp/x" }),
+    makeToolLine("Bash", { command: "rm -rf /data/engine-x" }),
     makeToolLine("Bash", { command: "ls -la" }),
     makeToolLine("Bash", { command: "sudo apt install x" }),
   ]);
@@ -66,7 +66,7 @@ test("run audit empty input", async () => {
 test("events stream in file order", async () => {
   const f = writeJsonl(join(makeTmpDir(), "order.jsonl"), [
     makeToolLine("Bash", { command: "echo one" }),
-    makeToolLine("Write", { file_path: "/tmp/x.py", content: "x" }),
+    makeToolLine("Write", { file_path: "/data/engine-x.py", content: "x" }),
     makeToolLine("WebFetch", { url: "https://example.com" }),
     makeToolLine("Bash", { command: "echo two" }),
   ]);
@@ -80,7 +80,7 @@ test("events stream in file order", async () => {
 test("run audit unreadable file counted, not fatal", async () => {
   const tmpDir = makeTmpDir();
   const good = writeJsonl(join(tmpDir, "ok.jsonl"), [
-    makeToolLine("Bash", { command: "rm -rf /tmp/x" }),
+    makeToolLine("Bash", { command: "rm -rf /data/engine-x" }),
   ]);
   const result = await runAudit([good, join(tmpDir, "missing.jsonl")]);
   expect(result.filesScanned).toBe(2);

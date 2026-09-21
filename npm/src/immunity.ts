@@ -72,6 +72,25 @@ function isAnchored(target: string): boolean {
 
 export const EXEMPT_NOTE_SELF_CREATED = "删除的是本会话创建的内容(回退/清理)";
 export const EXEMPT_NOTE_BUILD_ARTIFACT = "删除的是构建产物目录";
+export const EXEMPT_NOTE_SCRATCH = "删除的是临时目录内容";
+
+// Scratch/temp areas (M7v3): deleted targets entirely under a temp root are
+// downgraded — temp dirs exist to be wiped. Covers system /tmp & /var/tmp and
+// the drive-rooted convention X:/tmp (e.g. D:/tmp on machines whose C: is
+// full). NOT %TEMP%\AppData user temp (leave that to provenance; AppData
+// trees are per-user content, not scratch by convention).
+const SCRATCH_ROOTS: readonly string[] = ["/tmp", "/var/tmp"];
+function isScratchPath(target: string): boolean {
+  if (isRootLike(target)) {
+    return false;
+  }
+  const t = target.toLowerCase().replace(/\\/g, "/");
+  if (SCRATCH_ROOTS.some((r) => t === r || t.startsWith(r + "/"))) {
+    return true;
+  }
+  // drive-rooted temp convention: /tmp directly under a drive letter
+  return /^[a-z]:\/tmp(\/|$)/.test(t);
+}
 
 // Delete-command words and shell punctuation the crude tokenizer must not
 // mistake for targets (lowercase compare). M7v2 adds the bash-creation verbs
@@ -93,29 +112,58 @@ const SHELL_PUNCT: ReadonlySet<string> = new Set([
 // `/home/x`) and must survive as targets.
 const WINDOWS_SWITCH = /^\/[a-zA-Z]{1,2}$/;
 
-// Crude target extraction (spec M7): split on whitespace, drop flags (`-r`,
+// Crude target extraction (spec M7). M7v3 precision fix: targets come ONLY
+// from segments whose command word is a delete verb, positionally AFTER that
+// verb — environment assignments (`UV_CACHE_DIR=D:/x rm -rf D:/tmp/y`),
+// heredoc bodies and unrelated commands in the same line never contribute
+// "targets". Within a delete segment: split on whitespace, drop flags (`-r`,
 // `--force`) and Windows switches (`/s`, `/q`), strip surrounding quotes and
-// trailing globs, then drop the delete-command words themselves, shell
-// punctuation and redirection tokens. What survives is treated as a path
-// target (absolute, relative or bare name).
+// trailing globs, drop shell punctuation and redirection tokens, and skip
+// any token containing "=" (env assignment). What survives is a path target.
 export function extractDeleteTargets(raw: string): string[] {
   const targets: string[] = [];
-  for (const token of raw.split(/\s+/)) {
-    if (!token || token.startsWith("-") || WINDOWS_SWITCH.test(token)) {
-      continue; // flags and /s /q style switches
+  for (const seg of splitCommandSegments(raw)) {
+    if (deleteVerbIndex(seg) < 0) {
+      continue; // not a delete segment — its tokens are not delete targets
     }
-    let t = token.replace(/^['"]+/, "").replace(/['"]+$/, "");
-    t = t.replace(/\*+$/, ""); // trailing globs: dir/* -> dir/
-    t = t.replace(/[;|&]+$/, ""); // trailing command separators
-    if (!t || t.includes(">") || t.includes("<")) {
-      continue; // empty after stripping, or a redirection token
+    for (const token of seg.split(/\s+/)) {
+      if (!token || token.startsWith("-") || WINDOWS_SWITCH.test(token)) {
+        continue; // flags and /s /q style switches
+      }
+      if (token.includes("=")) {
+        continue; // env assignment (FOO=1, UV_CACHE_DIR=D:/x)
+      }
+      let t = token.replace(/^['"]+/, "").replace(/['"]+$/, "");
+      t = t.replace(/\*+$/, ""); // trailing globs: dir/* -> dir/
+      t = t.replace(/[;|&]+$/, ""); // trailing command separators
+      if (!t || t.includes(">") || t.includes("<")) {
+        continue; // empty after stripping, or a redirection token
+      }
+      if (DELETE_VERBS.has(t.toLowerCase()) || COMMAND_WORDS.has(t.toLowerCase()) || SHELL_PUNCT.has(t)) {
+        continue;
+      }
+      targets.push(t);
     }
-    if (COMMAND_WORDS.has(t.toLowerCase()) || SHELL_PUNCT.has(t)) {
-      continue;
-    }
-    targets.push(t);
   }
   return targets;
+}
+
+// Index of the delete verb token inside ONE segment (-1 when absent),
+// skipping env assignments and sudo/nohup prefixes.
+function deleteVerbIndex(seg: string): number {
+  const toks = seg.trim().split(/\s+/);
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i]!;
+    if (t.includes("=")) {
+      continue;
+    }
+    const w = t.toLowerCase();
+    if (w === "sudo" || w === "command" || w === "nohup") {
+      continue;
+    }
+    return DELETE_VERBS.has(w) ? i : -1; // first real word decides
+  }
+  return -1;
 }
 
 // Comparison normalization: backslashes to slashes, trailing slashes dropped.
@@ -496,6 +544,11 @@ export function applyCreatorImmunity(
   ) {
     finding.severity = "info";
     finding.note = EXEMPT_NOTE_SELF_CREATED;
+    return;
+  }
+  if (targets.every((t) => isScratchPath(t))) {
+    finding.severity = "info";
+    finding.note = EXEMPT_NOTE_SCRATCH;
     return;
   }
   if (targets.every((t) => hasArtifactSegment(t))) {
