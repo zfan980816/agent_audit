@@ -45,6 +45,16 @@
 - 读 `index/vector/v5/*/chat.db` chunk_table(路径+行区间,无内容)+ completion 索引的文件名清单 → 报告:仓库×文件数×chunk 数×时间
 - 定位为独立子命令 `agent-audit footprint --agent qoder`
 
+### M7:创建者豁免 + 隐私优先视图(用户 2026-09-21 指示)
+**问题**:agent 删除自己本会话创建的内容(回退/清理,如 Write 后 rm、清 node_modules)被 D001 记为 CRITICAL——淹没真正的隐私风险(私自收集/上传代码)。
+**设计**:
+1. **写入溯源**:引擎在一次运行内维护 `session→已写路径集`(FileWrite 事件按流序累积,同 E005 状态模式);D001 命中时若目标路径 ⊆ 该会话已写路径(前缀匹配)→ 降级为 info,附注「删除的是本会话创建的内容(回退/清理)」
+2. **构建产物豁免**:目标为知名构建目录(node_modules/dist/build/out/.next/target/__pycache__/.venv/venv/coverage/.gradle 等,含 rm -rf 相对路径形态)→ 同样降级
+3. **隐私类永不豁免**:E 系(外发)/C 系(凭证)/U 系/其余 D 系(D002 git reset、D004 擦盘)不参与豁免——宁可少量噪音,不漏隐私信号
+4. Finding 增加可选 `note`;报告/页面显示「已豁免」小标;by_severity 按降级后重计
+5. 页面加「隐私优先」预设筛(E+C 类),默认视图聚焦侵犯隐私项
+判据:write-then-rm 用例降级 + 保留可见性;rm 用户文件保持 CRITICAL;全量测试绿;等价门不受影响(豁免仅 TS 主线新行为,Python 冻结)。
+
 ## 非目标(明确写进 README)
 - 工具自身后台网络行为的**内容级**取证(TLS 加密;canary 方法论文档化供用户手动执行)
 - Trae 聊天审计(本地加密,等待破解或官方接口)

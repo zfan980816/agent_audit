@@ -4,7 +4,8 @@
 // claude-code parser, keeping every v0.1 caller/test unchanged) or
 // {agent, path} tags routed through the agent registry.
 import { AGENTS, type AgentFileEntry } from "./agents.js";
-import { SEVERITY_ORDER } from "./events.js";
+import { FileWrite, SEVERITY_ORDER } from "./events.js";
+import { applyCreatorImmunity, normalizeForCompare } from "./immunity.js";
 import { ParseStats } from "./parsers/claude-code.js";
 import type { Finding } from "./rules/base.js";
 import { allRules } from "./rules/index.js";
@@ -37,6 +38,11 @@ export async function runAudit(
   );
   const result = new AuditResult();
   const stats = new ParseStats();
+  // M7 (v0.3.x TS-canonical): per-run, per-session set of written paths,
+  // accumulated in stream order (same per-run state discipline as E005's
+  // lastArchive map — never outlives one scan). Feeds the D001
+  // creator-immunity downgrade: writes AFTER a delete do not cover it.
+  const writtenBySession = new Map<string, Set<string>>();
   // Python iterates a plain list of paths; the TS entry also accepts an async
   // source (for-await handles sync iterables too), so discovery can stream.
   for await (const entry of files) {
@@ -64,12 +70,29 @@ export async function runAudit(
           continue;
         }
         result.sessions.add(event.sessionId);
+        if (event instanceof FileWrite && event.path) {
+          let written = writtenBySession.get(event.sessionId);
+          if (written === undefined) {
+            written = new Set();
+            writtenBySession.set(event.sessionId, written);
+          }
+          written.add(normalizeForCompare(event.path));
+        }
         for (const rule of rules) {
           if (!rule.appliesTo.some((ctor) => event instanceof ctor)) {
             continue;
           }
           const finding = rule.check(event);
           if (finding !== null) {
+            // M7: downgrade BEFORE the severity sort below, so both the sort
+            // and by_severity reflect the exemption (spec rule 5). Only D001
+            // participates — applyCreatorImmunity re-guards on the rule id.
+            if (finding.ruleId === "D001") {
+              applyCreatorImmunity(
+                finding,
+                writtenBySession.get(event.sessionId),
+              );
+            }
             result.findings.push(finding);
           }
         }

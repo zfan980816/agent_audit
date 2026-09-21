@@ -30,6 +30,11 @@ files 42 · sessions 87 · events 12,340 · findings 23
 
 `agentaudit --list-rules` shows all of them with severities.
 
+Same-session deletion of agent-created content, or of well-known build-artifact
+directories (`node_modules`, `dist`, `target`, ...), is auto-downgraded to
+info and marked exempted (已豁免) — privacy-relevant rules (exfiltration,
+credentials) are never downgraded.
+
 ## Why
 
 Agents run shell commands all day. In April 2026, Claude Code's deny rules

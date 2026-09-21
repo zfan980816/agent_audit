@@ -131,11 +131,26 @@ const crNormalize = (buf) => buf.toString("utf8").replace(/\r\n/g, "\n");
 // with no Python counterpart (multi-agent plan decision 4 — Python is frozen
 // at v0.1.1). The parity gate compares the v0.1 surface, so the TS side strips
 // by_agent and re-serializes with identical indentation before byte-compare.
+//
+// v0.3.x (M7): per-finding `note` gets the same treatment — a TS-canonical
+// field (the creator-immunity exemption marker) Python never emits.
 const parityNormalize = (text) => {
   try {
     const data = JSON.parse(text);
+    let touched = false;
     if (data && data.summary && "by_agent" in data.summary) {
       delete data.summary.by_agent;
+      touched = true;
+    }
+    if (Array.isArray(data?.findings)) {
+      for (const f of data.findings) {
+        if (f && typeof f === "object" && "note" in f) {
+          delete f.note;
+          touched = true;
+        }
+      }
+    }
+    if (touched) {
       return JSON.stringify(data, null, 2) + "\n";
     }
   } catch {
@@ -143,6 +158,71 @@ const parityNormalize = (text) => {
   }
   return text;
 };
+
+// M7 real-data canonicalization: on REAL sessions the TS engine legitimately
+// downgrades exempt D001s (agent-deleted own content / build artifacts) to
+// info — severity, sort position and by_severity all shift, while frozen
+// Python v0.1.1 never downgrades. Stripping `note` alone cannot restore byte
+// equality there, so when the TS side carries ANY exemption note, both sides
+// are canonicalized instead: notes stripped, exempted D001s re-elevated to
+// critical, by_severity recounted, findings sorted by a deterministic total
+// key. Equal multiset + equal per-finding content then still compares equal.
+// Constructed corpora are kept free of exempt-pattern commands, so they keep
+// the strict raw byte+order comparison.
+const SEV_ORDER = ["info", "low", "medium", "high", "critical"];
+const hasNotes = (text) => {
+  try {
+    return JSON.parse(text)?.findings?.some((f) => f && typeof f === "object" && "note" in f) ?? false;
+  } catch {
+    return false;
+  }
+};
+const canonKey = (f) =>
+  [f.rule_id ?? "", f.timestamp ?? "", f.session_id ?? "", f.evidence ?? ""].join("\u0000");
+const canonicalize = (text) => {
+  try {
+    const data = JSON.parse(text);
+    if (!data || !Array.isArray(data.findings) || !data.summary) {
+      return text;
+    }
+    if ("by_agent" in data.summary) {
+      delete data.summary.by_agent;
+    }
+    for (const f of data.findings) {
+      if (f && typeof f === "object" && "note" in f) {
+        delete f.note;
+        if (f.rule_id === "D001" && f.severity === "info") {
+          f.severity = "critical"; // the only downgrade path in v0.3.x
+        }
+      }
+    }
+    const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+    for (const f of data.findings) {
+      counts[f.severity] = (counts[f.severity] ?? 0) + 1;
+    }
+    data.summary.by_severity = counts;
+    data.findings.sort((a, b) => {
+      const sa = SEV_ORDER.indexOf(a.severity);
+      const sb = SEV_ORDER.indexOf(b.severity);
+      if (sa !== sb) {
+        return sb - sa; // severity descending
+      }
+      const ka = canonKey(a);
+      const kb = canonKey(b);
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+    return JSON.stringify(data, null, 2) + "\n";
+  } catch {
+    return text;
+  }
+};
+
+// Produces the comparable (py, ts) pair: strict byte path when the TS side has
+// no M7 exemption notes, canonical path (both sides) when it does.
+const parityPair = (pyText, tsText) =>
+  hasNotes(tsText)
+    ? [canonicalize(pyText), canonicalize(tsText)]
+    : [pyText, parityNormalize(tsText)];
 
 // ------------------------------------------------------- boundary corpus ----
 // Constraints mirror the port divergence ledger so constructed data cannot
@@ -153,6 +233,9 @@ const parityNormalize = (text) => {
 //   G  cwd always a string or absent  I/J  ASCII-only command text
 //   L  millisecond fractions only (no 4-6 digit microseconds)
 //   K  no newlines inside path basenames
+//   M  no M7 exempt-pattern D001 targets (artifact dirs like node_modules/
+//      build, or write-then-delete pairs) — the TS creator-immunity downgrade
+//      is a known, accepted v0.3.x divergence from frozen Python
 
 function toolUse(name, input) {
   return { type: "tool_use", id: "t1", name, input };
@@ -183,7 +266,8 @@ function buildBoundaryCorpus(dir) {
   //    hits and non-hits, Write/Edit/NotebookEdit/WebFetch/WebSearch/Bash/mcp.
   writeFileLines(join(dir, "alpha-main.jsonl"), [
     jl(rec("sess-alpha", "2026-09-19T09:00:00Z", "/home/alpha/proj", [
-      toolUse("Bash", { command: "rm -rf node_modules" }), // D001 critical
+      // constraint M: non-artifact target (node_modules would be M7-exempted)
+      toolUse("Bash", { command: "rm -rf /home/alpha/proj/data" }), // D001 critical
     ])),
     jl(rec("sess-alpha", "2026-09-19T09:00:01Z", "/home/alpha/proj", [
       toolUse("Bash", { command: "cat .env" }), // C001 high
@@ -438,7 +522,7 @@ function buildBoundaryCorpus(dir) {
   //    falls back to the dir NAME "proj.name", session to the stem.
   writeFileLines(join(dir, "proj.name", "dotted-fallback.jsonl"), [
     jl(rec(undefined, "2026-09-19T08:00:00Z", undefined, [
-      toolUse("Bash", { command: "rm -rf build" }),
+      toolUse("Bash", { command: "rm -rf src" }), // constraint M: not an artifact dir
     ])),
   ]);
 
@@ -558,8 +642,7 @@ function realDataDiff(pyOut, tsOut) {
 async function runGate(name, args) {
   const py = await runPy(args);
   const ts = await runTs(args);
-  const pyOut = crNormalize(py.stdout);
-  const tsOut = parityNormalize(crNormalize(ts.stdout));
+  const [pyOut, tsOut] = parityPair(crNormalize(py.stdout), crNormalize(ts.stdout));
   const byteEqual = pyOut === tsOut;
   const exitOk = py.code === ts.code;
   const pass = byteEqual && exitOk && !py.timedOut && !ts.timedOut;
@@ -599,14 +682,11 @@ async function bisectCorpus(gate) {
     const args = [f, ...gate.args.slice(1)]; // file path + variant flags
     const py = await runPy(args);
     const ts = await runTs(args);
-    const equal =
-      crNormalize(py.stdout) === parityNormalize(crNormalize(ts.stdout));
-    const ok = equal && py.code === ts.code;
+    const [pyOut, tsOut] = parityPair(crNormalize(py.stdout), crNormalize(ts.stdout));
+    const ok = pyOut === tsOut && py.code === ts.code;
     console.log(`  ${ok ? "ok  " : "DIFF"} ${f}`);
     if (!ok) {
-      console.log(
-        `      ${firstDiffLines(crNormalize(py.stdout), parityNormalize(crNormalize(ts.stdout)))}`,
-      );
+      console.log(`      ${firstDiffLines(pyOut, tsOut)}`);
     }
   }
 }
@@ -662,11 +742,16 @@ async function realGates() {
     const liveRoot = resolve(homedir(), ".claude", "projects");
     const snap = await mkdtemp(join(tmpdir(), "agentaudit-equiv-r1-"));
     await cp(liveRoot, snap, { recursive: true });
-    const args = [snap, "--json"];
+    // M7: real sessions contain exempt-pattern D001s that the TS engine
+    // downgrades to info; the CLI's default floor "low" would FILTER them out
+    // (a missing-finding diff no normalization can repair). Both sides pin
+    // --severity info — the frozen Python ruleset emits no info findings, so
+    // its output is identical under either floor and the M7 notes survive on
+    // the TS side for the canonicalization path in parityPair().
+    const args = [snap, "--json", "--severity", "info"];
     const py = await runPy(args);
     const ts = await runTs(args);
-    const pyOut = crNormalize(py.stdout);
-    const tsOut = parityNormalize(crNormalize(ts.stdout));
+    const [pyOut, tsOut] = parityPair(crNormalize(py.stdout), crNormalize(ts.stdout));
     const exitOk = py.code === ts.code;
     const byteEqual = pyOut === tsOut;
     console.log(
@@ -688,11 +773,11 @@ async function realGates() {
   {
     rmSync(REAL_SNAP, { recursive: true, force: true });
     copyDirSync(REAL_DIR, REAL_SNAP);
-    const args = [REAL_SNAP, "--json"];
+    // same M7 floor pinning as R1 (see comment there)
+    const args = [REAL_SNAP, "--json", "--severity", "info"];
     const py = await runPy(args);
     const ts = await runTs(args);
-    const pyOut = crNormalize(py.stdout);
-    const tsOut = parityNormalize(crNormalize(ts.stdout));
+    const [pyOut, tsOut] = parityPair(crNormalize(py.stdout), crNormalize(ts.stdout));
     const byteEqual = pyOut === tsOut;
     const exitOk = py.code === ts.code;
     const pass = byteEqual && exitOk;

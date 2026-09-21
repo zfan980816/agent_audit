@@ -183,6 +183,10 @@ export interface ReportFindingDict {
   timestamp: string | null;
   explanation: string;
   recommendation: string;
+  // M7 (v0.3.x TS-canonical): exemption note from the D001 creator-immunity
+  // downgrade. Emitted ONLY when present and appended LAST, so noteless
+  // findings keep the exact Python v0.1 key list (T8 gate).
+  note?: string;
 }
 
 export interface ReportDict {
@@ -217,8 +221,8 @@ export function toDict(result: AuditResult): ReportDict {
       by_severity: { ...counts },
       by_agent: { ...result.byAgent },
     },
-    findings: result.findings.map(
-      (f): ReportFindingDict => ({
+    findings: result.findings.map((f): ReportFindingDict => {
+      const d: ReportFindingDict = {
         rule_id: f.ruleId,
         severity: f.severity,
         title: f.title,
@@ -231,8 +235,13 @@ export function toDict(result: AuditResult): ReportDict {
         timestamp: f.event.timestamp ? pyIso(f.event.timestamp) : null,
         explanation: f.explanation,
         recommendation: f.recommendation,
-      }),
-    ),
+      };
+      // M7: note only when present, appended LAST in key order
+      if (f.note !== undefined) {
+        d.note = f.note;
+      }
+      return d;
+    }),
   };
 }
 

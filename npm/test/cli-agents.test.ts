@@ -38,10 +38,12 @@ function capture(): Captured {
 
 function buildMixedTree(): string {
   const root = makeTmpDir();
-  // kimi session with one dangerous Bash call
+  // kimi session with one dangerous Bash call (non-artifact path: `build`
+  // would trip the M7 creator-immunity downgrade to info, and the CLI's
+  // default severity floor "low" would then filter the finding out entirely)
   writeKimiSession(root, [
     kimiMetadata(),
-    kimiToolCall("Bash", { command: "rm -rf D:/demo/kimi-proj/build" }),
+    kimiToolCall("Bash", { command: "rm -rf D:/demo/kimi-proj/src" }),
   ], { sessionId: "session_kimi-0001", wdName: "wd_mixed_aaa111" });
   // claude session with one safe call
   writeJsonl(join(root, "claude-sess.jsonl"), [

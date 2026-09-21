@@ -21,6 +21,8 @@ agent-audit --demo      # 没装 Claude Code?跑内置演示
 
 `agentaudit --list-rules` 查看全部规则与严重度。
 
+删除本会话内 Agent 自己创建的内容、或常见构建产物目录(`node_modules`、`dist`、`target` 等)时,该发现自动降级为提示(info)并标注「已豁免」;隐私类规则(数据外发 E、凭证访问 C)永不降级。
+
 ## 安装与使用
 
 需要 Node 18+。

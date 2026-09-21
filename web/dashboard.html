@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-audit · 安全审计台</title>
+<style>
+  /* ============ design tokens ============================================
+     data colors: dataviz reference (status palette + categorical slots 1-4)
+     chrome: Grafana-style blue-black console, own surface ramp            */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:      #0b0f14;
+    --panel:     #111721;
+    --panel-2:   #151d29;
+    --hover:     rgba(255,255,255,0.045);
+    --line:      rgba(255,255,255,0.08);
+    --line-soft: rgba(255,255,255,0.05);
+    --ink-1:     #e8ecf3;
+    --ink-2:     #9aa7b8;
+    --ink-3:     #5d6b7e;
+    --accent:    #3b82f6;
+    --accent-dim:#1d4ed8;
+    --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 28px rgba(0,0,0,.35);
+    --sev-critical:#d03b3b; --sev-high:#ec835a; --sev-medium:#fab219;
+    --sev-low:#3987e5;     --sev-info:#898781;
+    --cat-1:#3987e5; --cat-2:#d95926; --cat-3:#199e70; --cat-4:#c98500;
+    --code-bg:  rgba(255,255,255,0.05);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --page:      #f3f5f8;
+    --panel:     #ffffff;
+    --panel-2:   #f8fafc;
+    --hover:     rgba(15,23,42,0.04);
+    --line:      rgba(15,23,42,0.10);
+    --line-soft: rgba(15,23,42,0.06);
+    --ink-1:     #0f172a;
+    --ink-2:     #475569;
+    --ink-3:     #94a3b8;
+    --accent:    #2563eb;
+    --accent-dim:#93c5fd;
+    --shadow:    0 1px 2px rgba(15,23,42,.06), 0 8px 24px rgba(15,23,42,.08);
+    --sev-critical:#d03b3b; --sev-high:#ec835a; --sev-medium:#eda100;
+    --sev-low:#2a78d6;      --sev-info:#898781;
+    --cat-1:#2a78d6; --cat-2:#eb6834; --cat-3:#1baf7a; --cat-4:#eda100;
+    --code-bg:  rgba(15,23,42,0.05);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--page); color: var(--ink-1);
+    font: 14px/1.6 "Inter", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ============ app frame: sidebar + main ============================== */
+  .app { display: grid; grid-template-columns: 224px 1fr; min-height: 100vh; }
+  aside {
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 20px 14px; display: flex; flex-direction: column; gap: 4px;
+    position: sticky; top: 0; height: 100vh; overflow: auto;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 18px; }
+  .brand .mark { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, var(--accent-dim), var(--accent));
+    display: grid; place-items: center; font-size: 16px; color: #fff; }
+  .brand b { font-size: 15px; letter-spacing: .2px; }
+  .brand small { display: block; color: var(--ink-3); font-size: 11px; font-weight: 400; }
+  nav { display: flex; flex-direction: column; gap: 2px; }
+  nav a {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px;
+    color: var(--ink-2); text-decoration: none; font-size: 13.5px; font-weight: 500;
+  }
+  nav a:hover { background: var(--hover); color: var(--ink-1); }
+  nav a.on { background: var(--hover); color: var(--ink-1); box-shadow: inset 2px 0 0 var(--accent); }
+  nav a .ic { width: 18px; text-align: center; }
+  nav a .n { margin-left: auto; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .side-foot { margin-top: auto; padding: 12px 10px 4px; color: var(--ink-3); font-size: 11.5px; line-height: 1.7; border-top: 1px solid var(--line-soft); }
+  .theme-sw { margin: 10px 10px 0; background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-2);
+    border-radius: 8px; padding: 7px 10px; cursor: pointer; font-size: 12px; }
+  .theme-sw:hover { color: var(--ink-1); }
+
+  main { padding: 26px 32px 60px; max-width: 1240px; }
+
+  /* ============ page head ============================================== */
+  .pagehead { display: flex; align-items: flex-end; gap: 18px; margin-bottom: 22px; flex-wrap: wrap; }
+  .pagehead h1 { font-size: 21px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  .pagehead .sub { color: var(--ink-3); font-size: 12.5px; margin-top: 3px; }
+  .pagehead .right { margin-left: auto; color: var(--ink-3); font-size: 12px; text-align: right; line-height: 1.7; }
+
+  /* ============ hero band ============================================== */
+  .hero { display: grid; grid-template-columns: minmax(300px, 1.1fr) minmax(280px, .9fr); gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 1060px) { .hero { grid-template-columns: 1fr; } }
+  .hero-left { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px 24px; box-shadow: var(--shadow); display: flex; gap: 26px; align-items: center; }
+  .hero-num { min-width: 170px; }
+  .hero-num .lbl { color: var(--ink-2); font-size: 13px; font-weight: 500; }
+  .hero-num .val { font-size: 58px; font-weight: 750; line-height: 1.05; letter-spacing: -1.5px; }
+  .hero-num .val.hot { color: var(--sev-critical); }
+  .hero-num .sub { color: var(--ink-3); font-size: 12px; margin-top: 4px; }
+  .hero-sev { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; flex: 1; }
+  .sev-mini { padding: 10px 12px; background: var(--panel-2); border-radius: 10px; border: 1px solid var(--line-soft); }
+  .sev-mini .k { font-size: 11px; color: var(--ink-2); display: flex; gap: 5px; align-items: center; }
+  .sev-mini .v { font-size: 24px; font-weight: 700; margin-top: 1px; font-variant-numeric: tabular-nums; }
+  .sev-mini .bar { height: 4px; border-radius: 2px; margin-top: 7px; background: var(--line-soft); overflow: hidden; }
+  .sev-mini .bar i { display: block; height: 100%; border-radius: 2px; }
+
+  .donut-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 20px 12px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 20px; }
+  .donut { position: relative; width: 158px; height: 158px; flex: none; }
+  .donut svg { transform: rotate(-90deg); }
+  .donut .c { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+  .donut .c b { font-size: 26px; font-weight: 750; display: block; line-height: 1.1; }
+  .donut .c span { font-size: 11px; color: var(--ink-3); }
+  .donut-legend { flex: 1; display: flex; flex-direction: column; gap: 7px; }
+  .dl-row { display: grid; grid-template-columns: 10px 1fr auto; gap: 9px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+  .dl-row i { width: 10px; height: 10px; border-radius: 3px; }
+  .dl-row b { color: var(--ink-1); font-variant-numeric: tabular-nums; font-weight: 650; }
+  .dl-row .pct { color: var(--ink-3); font-size: 11px; margin-left: 6px; }
+
+  /* ============ section ================================================= */
+  .sec { margin: 26px 0 12px; display: flex; align-items: baseline; gap: 10px; }
+  .sec h2 { font-size: 15px; margin: 0; font-weight: 650; }
+  .sec .hint { color: var(--ink-3); font-size: 12px; }
+  .sec .right { margin-left: auto; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 18px 14px; box-shadow: var(--shadow); }
+  .card h3 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--ink-2);
+    display: flex; align-items: center; gap: 7px; }
+  .card .big { font-size: 27px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card .sub { color: var(--ink-3); font-size: 11.5px; margin-top: 2px; }
+
+  /* horizontal bars (agents / categories) */
+  .brow { display: grid; grid-template-columns: 128px 1fr 58px; gap: 12px; align-items: center; padding: 6px 0; }
+  .brow .lb { font-size: 12.5px; color: var(--ink-2); display: flex; align-items: center; gap: 7px; white-space: nowrap; overflow: hidden; }
+  .brow .lb i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+  .brow .tk { height: 14px; position: relative; }
+  .brow .tk b { position: absolute; inset: 0 auto 0 0; border-radius: 0 4px 4px 0; min-width: 2px; }
+  .brow .vl { font-size: 12px; color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
+  .brow:hover .tk b { opacity: .8; }
+
+  /* ============ filter toolbar ========================================= */
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 14px 0 12px; }
+  .chip { border: 1px solid var(--line); background: var(--panel); color: var(--ink-2); font: inherit;
+    font-size: 12px; padding: 7px 12px; border-radius: 10px; cursor: pointer; white-space: nowrap; }
+  .chip:hover { color: var(--ink-1); background: var(--hover); }
+  .chip.on { background: var(--accent-dim); color: #fff; font-weight: 600; border-color: transparent; }
+  :root[data-theme="light"] .chip.on { background: var(--accent); }
+  .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 2px; }
+  .seg button { border: 0; background: transparent; color: var(--ink-2); font: inherit; font-size: 12px;
+    padding: 5px 11px; border-radius: 7px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .seg button:hover { color: var(--ink-1); background: var(--hover); }
+  .seg button.on { background: var(--accent-dim); color: #fff; font-weight: 600; }
+  :root[data-theme="light"] .seg button.on { background: var(--accent); }
+  .seg .cnt { font-variant-numeric: tabular-nums; opacity: .75; font-size: 11px; }
+  .search { flex: 1; min-width: 220px; position: relative; }
+  .search input { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--ink-1); font: inherit; font-size: 13px; padding: 9px 12px 9px 34px; }
+  .search input:focus { outline: 2px solid var(--accent-dim); outline-offset: -1px; }
+  .search .ic { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--ink-3); font-size: 13px; }
+  .result-n { color: var(--ink-3); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+  /* ============ findings table ========================================= */
+  .tbl { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: var(--shadow); }
+  .tbl-scroll { overflow: auto; max-height: 72vh; }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13px; }
+  thead th { position: sticky; top: 0; z-index: 2; background: var(--panel-2); text-align: left;
+    color: var(--ink-3); font-weight: 600; font-size: 11px; letter-spacing: .5px; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); white-space: nowrap; }
+  tbody td { padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr.main:hover { background: var(--hover); cursor: pointer; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 650;
+    padding: 3px 9px; border-radius: 999px; letter-spacing: .3px; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 2px; }
+  .pill.exempt { background: var(--code-bg); color: var(--ink-3); margin-left: 5px; font-weight: 600; }
+  .rule-id { font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .3px; }
+  .title-cell b { font-weight: 600; }
+  .title-cell small { display: block; color: var(--ink-3); font-size: 11.5px; margin-top: 1px; }
+  .dim { color: var(--ink-3); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  code.evi { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11.5px; color: var(--ink-2);
+    background: var(--code-bg); padding: 3px 8px; border-radius: 6px; display: inline-block; max-width: 360px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  tr.detail td { background: var(--panel-2); padding: 0 14px; border-bottom: 1px solid var(--line-soft); }
+  .detail-in { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px 0; }
+  @media (max-width: 900px) { .detail-in { grid-template-columns: 1fr; } }
+  .detail-in .box { border-left: 2px solid var(--line); padding-left: 12px; }
+  .detail-in .box.why { border-left-color: var(--sev-high); }
+  .detail-in .box.fix { border-left-color: var(--cat-3); }
+  .detail-in .box.note { border-left-color: var(--sev-info); }
+  .detail-in h4 { margin: 0 0 4px; font-size: 11px; color: var(--ink-3); letter-spacing: .5px; }
+  .detail-in p { margin: 0; color: var(--ink-2); font-size: 12.5px; }
+  .detail-in pre { margin: 6px 0 0; background: var(--code-bg); border-radius: 8px; padding: 10px 12px;
+    font-size: 11.5px; color: var(--ink-2); overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  .empty-state { padding: 60px 20px; text-align: center; color: var(--ink-3); }
+  .empty-state .big { font-size: 34px; margin-bottom: 8px; }
+
+  #tip { position: fixed; pointer-events: none; background: var(--panel-2); color: var(--ink-1);
+    border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px; font-size: 12px;
+    box-shadow: var(--shadow); opacity: 0; transition: opacity .08s; z-index: 99; font-variant-numeric: tabular-nums; }
+
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; }
+    aside { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; }
+    .brand { padding: 4px 8px; }
+    nav { flex-direction: row; }
+    .side-foot { display: none; }
+    main { padding: 18px 16px 40px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand">
+      <div class="mark">🛡</div>
+      <div><b>agent-audit</b><small>AI Agent 安全审计台</small></div>
+    </div>
+    <nav id="nav">
+      <a href="#top" class="on"><span class="ic">◉</span> 概览</a>
+      <a href="#findings"><span class="ic">⛔</span> 发现明细 <span class="n" id="navFindings"></span></a>
+      <a href="#breakdown"><span class="ic">▦</span> 维度拆解</a>
+      <a href="#about"><span class="ic">ℹ</span> 关于与口径</a>
+    </nav>
+    <div class="side-foot" id="sideMeta"></div>
+    <button class="theme-sw" id="themeBtn" type="button">🌙 / ☀️ 切换主题</button>
+  </aside>
+
+  <main id="top">
+    <div class="pagehead">
+      <div>
+        <h1>审计概览</h1>
+        <div class="sub" id="subLine"></div>
+      </div>
+      <div class="right" id="genLine"></div>
+    </div>
+
+    <!-- hero: headline number + severity minis + donut -->
+    <div class="hero">
+      <div class="hero-left">
+        <div class="hero-num">
+          <div class="lbl">安全发现</div>
+          <div class="val" id="heroVal">0</div>
+          <div class="sub" id="heroSub"></div>
+        </div>
+        <div class="hero-sev" id="heroSev"></div>
+      </div>
+      <div class="donut-card">
+        <div class="donut">
+          <svg id="donutSvg" width="158" height="158" viewBox="0 0 158 158"></svg>
+          <div class="c"><div><b id="donutC">0</b><span>总发现</span></div></div>
+        </div>
+        <div class="donut-legend" id="donutLegend"></div>
+      </div>
+    </div>
+
+    <!-- KPI cards -->
+    <div class="cards" id="kpiCards"></div>
+
+    <!-- breakdown -->
+    <div class="sec" id="breakdown"><h2>维度拆解</h2><span class="hint">按 Agent 与规则类别</span></div>
+    <div class="cards">
+      <div class="card"><h3>▤ 按 Agent<span style="font-weight:400;color:var(--ink-3)"> 扫描文件数</span></h3><div id="agentBars"></div></div>
+      <div class="card"><h3>▤ 按规则类别<span style="font-weight:400;color:var(--ink-3)"> 发现数</span></h3><div id="catBars"></div></div>
+    </div>
+
+    <!-- findings -->
+    <div class="sec" id="findings"><h2>发现明细</h2><span class="hint">点击行展开解释与处置建议</span>
+      <span class="right result-n" id="resultN"></span></div>
+    <div class="toolbar">
+      <button class="chip" id="privChip" type="button" title="只看数据外发(E)与凭证访问(C)类发现">隐私优先</button>
+      <div class="seg" id="segSev"></div>
+      <div class="search"><span class="ic">⌕</span><input id="q" type="search" placeholder="搜索 规则 / 标题 / 证据 / 项目 / 建议…"></div>
+    </div>
+    <div class="tbl">
+      <div class="tbl-scroll">
+      <table>
+        <thead><tr><th style="width:112px">严重度</th><th style="width:64px">规则</th><th>发现</th>
+          <th style="width:130px">项目</th><th style="width:78px">会话</th><th style="width:118px">时间</th><th>证据</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="empty-state" id="empty" hidden><div class="big">🔍</div>没有匹配的发现项<br><span style="font-size:12px">按 Esc 清空筛选</span></div>
+      </div>
+    </div>
+
+    <div class="sec" id="about"><h2>关于与口径</h2></div>
+    <div class="cards" id="aboutCards"></div>
+  </main>
+</div>
+<div id="tip"></div>
+
+<script>
+window.__REPORT = /*__REPORT_JSON__*/null;
+
+/* ---------------- data tokens ---------------- */
+const SEV = ["critical","high","medium","low","info"];
+const SEV_ZH  = {critical:"危急", high:"高危", medium:"中危", low:"低危", info:"提示"};
+const SEV_EN  = {critical:"CRITICAL", high:"HIGH", medium:"MEDIUM", low:"LOW", info:"INFO"};
+const SEV_ICON= {critical:"⛔", high:"⚠", medium:"▲", low:"●", info:"·"};
+const SV = s => `var(--sev-${s})`;
+const CAT = {D:{t:"破坏性操作",v:"var(--cat-1)"}, C:{t:"凭证访问",v:"var(--cat-2)"},
+             E:{t:"数据外发",v:"var(--cat-3)"}, B:{t:"越权/持久化",v:"var(--cat-4)"}, U:{t:"危险执行",v:"var(--cat-1)"}};
+const R = window.__REPORT, S = R.summary;
+const F = R.findings;
+
+/* ---------------- header / meta ---------------- */
+document.getElementById("subLine").textContent =
+  `本机 AI 编码工具历史 · ${S.files} 文件 / ${S.sessions} 会话 / ${S.events.toLocaleString()} 事件` +
+  (S.files_failed ? ` · ${S.files_failed} 文件读取失败` : "") +
+  (S.lines_skipped ? ` · ${S.lines_skipped} 行损坏已跳过` : "");
+document.getElementById("genLine").innerHTML =
+  `报告生成于 ${new Date().toLocaleString("zh-CN",{hour12:false})}<br>` +
+  `agent-audit · npm @fanzhen/agent-audit`;
+document.getElementById("sideMeta").innerHTML =
+  `<b style="color:var(--ink-2)">覆盖 Agent</b><br>${Object.keys(S.by_agent||{}).join(" · ")}<br><br>` +
+  `事件 ${S.events.toLocaleString()} · 会话 ${S.sessions}`;
+document.getElementById("navFindings").textContent = S.total;
+
+/* ---------------- hero ---------------- */
+const crit = S.by_severity.critical ?? 0, high = S.by_severity.high ?? 0;
+const heroVal = document.getElementById("heroVal");
+heroVal.textContent = S.total.toLocaleString();
+heroVal.classList.toggle("hot", crit > 0);
+document.getElementById("heroSub").textContent =
+  crit > 0 ? `其中 ${crit} 条危急 · ${high} 条高危,建议立即处理`
+           : `无危急项 · ${high} 条高危待复核`;
+const maxSev = Math.max(1, ...SEV.map(s => S.by_severity[s] ?? 0));
+document.getElementById("heroSev").innerHTML = SEV.slice(0,4).map(s => {
+  const v = S.by_severity[s] ?? 0;
+  return `<div class="sev-mini"><div class="k"><span>${SEV_ICON[s]}</span>${SEV_ZH[s]}</div>
+    <div class="v">${v}</div>
+    <div class="bar"><i style="width:${Math.max(v?6:0, v/maxSev*100)}%;background:${SV(s)}"></i></div></div>`;
+}).join("");
+
+/* donut (svg, 2px gaps between segments) */
+(function donut(){
+  const svg = document.getElementById("donutSvg");
+  const cx=79, cy=79, r=62, w=17, C=2*Math.PI*r;
+  const total = Math.max(1, S.total);
+  let off = 0, html = "";
+  for (const s of SEV) {
+    const v = S.by_severity[s] ?? 0;
+    const frac = v / total;
+    const dash = Math.max(frac*C - 2.5, frac > 0 ? 1.5 : 0);
+    html += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${SV(s)}" stroke-width="${w}"
+      stroke-dasharray="${dash} ${C-dash}" stroke-dashoffset="${-off}" stroke-linecap="butt"
+      data-tip="${SEV_ZH[s]} ${SEV_EN[s]}:${v} 条(${(frac*100).toFixed(1)}%)"><title>${SEV_ZH[s]} ${v}</title></circle>`;
+    off += frac * C;
+  }
+  if (S.total === 0) html = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--line)" stroke-width="${w}"></circle>`;
+  svg.innerHTML = html;
+  document.getElementById("donutC").textContent = S.total.toLocaleString();
+  document.getElementById("donutLegend").innerHTML = SEV.map(s => {
+    const v = S.by_severity[s] ?? 0, p = S.total ? (v/S.total*100).toFixed(1) : "0.0";
+    return `<div class="dl-row"><i style="background:${SV(s)}"></i>
+      <span>${SEV_ICON[s]} ${SEV_ZH[s]} <span class="pct">${p}%</span></span><b>${v}</b></div>`;
+  }).join("");
+})();
+
+/* ---------------- KPI cards ---------------- */
+const agents = Object.entries(S.by_agent || {}).sort((a,b)=>b[1]-a[1]);
+const catCount = {};
+F.forEach(f => catCount[f.rule_id[0]] = (catCount[f.rule_id[0]]||0)+1);
+const topCat = Object.entries(catCount).sort((a,b)=>b[1]-a[1])[0];
+document.getElementById("kpiCards").innerHTML = [
+  ["🗂", "扫描文件", S.files.toLocaleString(), `${S.sessions} 个会话 · ${S.events.toLocaleString()} 个事件`],
+  ["🤖", "覆盖 Agent", String(agents.length), agents.map(a=>a[0]).join(" · ")],
+  ["🏷", "最集中类别", topCat ? `${topCat[0]} · ${CAT[topCat[0]].t}` : "—", topCat ? `${topCat[1]} 条发现` : ""],
+  ["⛔", "危急 + 高危", String(crit + high), "优先处理队列"],
+].map(([ic,k,v,s]) => `<div class="card"><h3>${ic} ${k}</h3><div class="big">${v}</div><div class="sub">${s}</div></div>`).join("");
+
+/* ---------------- breakdown bars ---------------- */
+function bars(el, rows){
+  const max = Math.max(1, ...rows.map(r=>r.v));
+  el.innerHTML = rows.map(r => `
+    <div class="brow" data-tip="${r.tip}">
+      <div class="lb"><i style="background:${r.c}"></i>${r.label}</div>
+      <div class="tk"><b style="width:${(r.v/max*100).toFixed(1)}%;background:${r.c}"></b></div>
+      <div class="vl">${r.v.toLocaleString()}</div>
+    </div>`).join("");
+}
+const CAT_SLOT = ["--cat-1","--cat-2","--cat-3","--cat-4"];
+bars(document.getElementById("agentBars"),
+  agents.map(([k,v],i)=>({label:k, v, c:`var(${CAT_SLOT[i%4]})`, tip:`${k}:${v} 个会话文件`})));
+bars(document.getElementById("catBars"),
+  Object.entries(catCount).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({label:`${k} · ${CAT[k].t}`, v, c:CAT[k].v, tip:`${CAT[k].t}:${v} 条`})));
+
+/* ---------------- findings table ---------------- */
+const segSev = document.getElementById("segSev"), q = document.getElementById("q");
+segSev.innerHTML = `<button class="on" data-s="">全部 <span class="cnt" id="segAll"></span></button>` +
+  SEV.filter(s=>(S.by_severity[s]??0) > 0).map(s =>
+    `<button data-s="${s}">${SEV_ICON[s]} ${SEV_ZH[s]} <span class="cnt">${S.by_severity[s]}</span></button>`).join("");
+document.getElementById("segAll").textContent = S.total;
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const shortT = ts => ts ? ts.replace("T"," ").replace(/\+00:00$/,"").replace(/\.\d+$/,"") : "—";
+let openIdx = -1, curSev = "", curQ = "";
+
+/* 隐私优先 (M7): leading toggle chip — on = only E (exfiltration) + C
+   (credential) findings; clicking off restores the full list. */
+const privChip = document.getElementById("privChip");
+let privacyOn = false;
+privChip.addEventListener("click", () => {
+  privacyOn = !privacyOn;
+  privChip.classList.toggle("on", privacyOn);
+  render();
+});
+
+function pass(f){
+  if (privacyOn) {
+    const c = String(f.rule_id || "")[0];
+    if (c !== "E" && c !== "C") return false;
+  }
+  if (curSev && f.severity !== curSev) return false;
+  if (curQ && ![f.rule_id,f.title,f.evidence,f.project,f.explanation,f.recommendation].join(" ").toLowerCase().includes(curQ)) return false;
+  return true;
+}
+function render(){
+  const list = F.map((f,i)=>[f,i]).filter(([f])=>pass(f));
+  document.getElementById("resultN").textContent = `${list.length} / ${F.length} 条`;
+  const empty = document.getElementById("empty");
+  empty.hidden = list.length > 0;
+  const tb = document.getElementById("tbody");
+  tb.innerHTML = list.slice(0,400).map(([f,i]) => {
+    const s = f.severity, cat = CAT[f.rule_id[0]] || {t:""};
+    const proj = String(f.project||"").replace(/\\/g,"/").split("/").filter(Boolean).pop() || f.project || "—";
+    const main = `<tr class="main" data-i="${i}">
+      <td><span class="pill" style="background:color-mix(in srgb, ${SV(s)} 14%, transparent);color:${SV(s)}">
+        <span class="dot" style="background:${SV(s)}"></span>${SEV_ICON[s]} ${SEV_ZH[s]}</span>${f.note ? `<span class="pill exempt">已豁免</span>` : ""}</td>
+      <td class="rule-id">${esc(f.rule_id)}</td>
+      <td class="title-cell"><b>${esc(f.title)}</b><small>${cat.t}</small></td>
+      <td class="dim">${esc(proj)}</td>
+      <td class="dim num">${esc(String(f.session_id||"").slice(0,8))}</td>
+      <td class="dim num">${esc(shortT(f.timestamp))}</td>
+      <td><code class="evi" title="${esc(f.evidence)}">${esc(f.evidence)}</code></td></tr>`;
+    const det = i === openIdx ? `<tr class="detail"><td colspan="7"><div class="detail-in">
+        <div class="box why"><h4>为什么算风险</h4><p>${esc(f.explanation)}</p></div>
+        <div class="box fix"><h4>处置建议</h4><p>${esc(f.recommendation)}</p><pre>${esc(f.evidence)}</pre></div>
+        ${f.note ? `<div class="box note"><h4>豁免说明</h4><p>${esc(f.note)}</p></div>` : ""}
+      </div></td></tr>` : "";
+    return main + det;
+  }).join("");
+  if (list.length > 400)
+    document.getElementById("resultN").textContent += "(显示前 400,请缩小筛选)";
+}
+document.getElementById("tbody").addEventListener("click", e => {
+  const tr = e.target.closest("tr.main"); if (!tr) return;
+  const i = +tr.dataset.i;
+  openIdx = openIdx === i ? -1 : i;
+  render();
+});
+segSev.addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  segSev.querySelectorAll("button").forEach(x=>x.classList.toggle("on", x===b));
+  curSev = b.dataset.s; render();
+});
+q.addEventListener("input", () => { curQ = q.value.trim().toLowerCase(); render(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    curQ = q.value = ""; curSev = "";
+    privacyOn = false; privChip.classList.remove("on");
+    segSev.querySelectorAll("button").forEach((x,i)=>x.classList.toggle("on", i===0));
+    render();
+  }
+});
+render();
+
+/* ---------------- about ---------------- */
+document.getElementById("aboutCards").innerHTML = [
+  ["口径", `「发现」= 命中 agent-audit 28 条安全规则的记录;严重度由规则定义,非实际损失的证明。`],
+  ["本地与隐私", `本页由 agent-audit 在你的机器上生成,数据全部来自本地会话文件;页面离线可用,不含任何外部请求。`],
+  ["无障碍", `颜色仅辅助,严重度始终带图标与文字;明细表即完整数据视图;深浅色主题经对比度校验。`],
+].map(([k,v]) => `<div class="card"><h3>${k}</h3><p style="margin:6px 0 0;color:var(--ink-2);font-size:12.5px">${v}</p></div>`).join("");
+
+/* ---------------- tooltip ---------------- */
+const tip = document.getElementById("tip");
+document.addEventListener("mouseover", e => {
+  const el = e.target.closest("[data-tip]"); if (!el) return;
+  const r = el.getBoundingClientRect();
+  tip.textContent = el.dataset.tip;
+  tip.style.opacity = 1;
+  tip.style.left = Math.min(innerWidth - 200, r.left + r.width/2 - 70) + "px";
+  tip.style.top = Math.max(6, r.top - 36) + "px";
+});
+document.addEventListener("mouseout", e => { if (e.target.closest("[data-tip]")) tip.style.opacity = 0; });
+
+/* ---------------- theme ---------------- */
+const btn = document.getElementById("themeBtn");
+const saved = (()=>{ try { return localStorage.getItem("aa-theme-v2"); } catch { return null; } })();
+if (saved) document.documentElement.dataset.theme = saved; // else keep light (html default)
+btn.onclick = () => {
+  const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("aa-theme-v2", t); } catch {}
+};
+
+/* ---------------- nav highlight ---------------- */
+const links = document.querySelectorAll("#nav a");
+links.forEach(a => a.addEventListener("click", () => {
+  links.forEach(x=>x.classList.remove("on")); a.classList.add("on");
+}));
+</script>
+</body>
+</html>

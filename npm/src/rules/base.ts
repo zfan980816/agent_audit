@@ -16,6 +16,10 @@ export interface Finding {
   evidence: string;
   explanation: string;
   recommendation: string;
+  // M7 (v0.3.x TS-canonical, Python frozen at v0.1.1 has none): exemption
+  // note set by the engine's creator-immunity downgrade (D001 only). Absent
+  // on every non-exempt finding; report.toDict emits it LAST when present.
+  note?: string;
 }
 
 export function evidenceOf(event: Event): string {
