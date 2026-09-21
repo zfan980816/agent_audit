@@ -491,3 +491,65 @@ test("chained create+delete in ONE command downgrades (same-line creations count
   expect(f.note).toContain("回退");
   expect(toDict(result).summary.by_severity.critical).toBe(0);
 });
+
+// ------------------------------- M7v2 review Issue 1/2 regression tests --
+
+test("delete-before-create in one line is NOT whitewashed (rm && mkdir)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf ~/work && mkdir ~/work" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("critical");
+  expect(f.note).toBeUndefined();
+});
+
+test("env-prefixed delete-before-create stays critical", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "FOO=1 rm -rf D:/docs && mkdir D:/docs" }),
+    ]),
+  ]);
+  expect(find(result, "D001").severity).toBe("critical");
+});
+
+test("create-before-delete in one line still downgrades (mkdir && rm)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "mkdir -p /tmp/mk && rm -rf /tmp/mk" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("info");
+  expect(f.note).toContain("回退");
+});
+
+test("mixed line with leading delete under-counts conservatively", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf /tmp/w1 && mkdir /tmp/w1" }),
+      makeToolLine("Bash", { command: "rm -rf /tmp/w1" }),
+    ]),
+  ]);
+  // first line's delete precedes its creation; second line's delete cannot
+  // see the post-delete creation either -> stays critical
+  expect(find(result, "D001").severity).toBe("critical");
+});
+
+test("extractCreatedPaths git clone flag-with-value forms", async () => {
+  const { extractCreatedPaths } = await import("../src/immunity.js");
+  expect(extractCreatedPaths("git clone --depth 1 https://x/r.git", null)).toEqual(["r"]);
+  expect(extractCreatedPaths("git clone https://x/r.git --depth 1", null)).toEqual(["r"]);
+  expect(extractCreatedPaths("git clone --depth=1 https://x/r.git mydir", null)).toEqual(["mydir"]);
+});
+
+test("extractCreatedPaths beforeFirstDelete is position-aware", async () => {
+  const { extractCreatedPaths } = await import("../src/immunity.js");
+  // NOTE: multi-char path segments — the tokenizer treats 1-2 letter
+  // slash-tokens (/a) as Windows switches, an accepted tradeoff
+  expect(extractCreatedPaths("rm -rf /tmp/aa && mkdir /tmp/aa", null, { beforeFirstDelete: true })).toEqual([]);
+  expect(extractCreatedPaths("mkdir /tmp/aa && rm -rf /tmp/aa", null, { beforeFirstDelete: true })).toEqual(["/tmp/aa"]);
+  expect(extractCreatedPaths("mkdir /tmp/zz", null, { beforeFirstDelete: true })).toEqual(["/tmp/zz"]);
+  expect(extractCreatedPaths("sudo rm -rf /tmp/bb && mkdir /tmp/bb", null, { beforeFirstDelete: true })).toEqual([]);
+});

@@ -81,10 +81,14 @@ export async function runAudit(
           // M7v2: bash-creation provenance — paths this command line CREATES
           // (mkdir/touch/redirect/tee/cp/mv/git clone/curl -o) join the same
           // per-session set in stream order, so creations cover only LATER
-          // deletes. Documented choice: a command line's own created paths
-          // count for deletes EARLIER IN THE SAME LINE too (`mkdir x &&
-          // rm -rf x` is info) — the engine adds them before the rules run.
-          const created = extractCreatedPaths(event.raw, event.cwd);
+          // deletes. Documented choice: creations from segments BEFORE the
+          // line's first delete count for that line too (`mkdir x &&
+          // rm -rf x` is info) — but a delete that runs BEFORE its creation
+          // (`rm -rf x && mkdir x`) is NOT whitewashed (M7v2 review Issue 1;
+          // beforeFirstDelete makes the feed position-aware).
+          const created = extractCreatedPaths(event.raw, event.cwd, {
+            beforeFirstDelete: true,
+          });
           if (created.length > 0) {
             let written = writtenBySession.get(event.sessionId);
             if (written === undefined) {

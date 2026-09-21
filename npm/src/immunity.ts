@@ -307,7 +307,28 @@ function commandCreatedPaths(
       if ((rest[0] ?? "").toLowerCase() !== "clone") {
         return;
       }
-      const pos = rest.slice(1).filter((a) => !isFlagToken(a));
+      // value-taking flags consume their argument (--depth 1, -b name) so the
+      // value is never mistaken for the url or the destination dir
+      const VALUE_FLAGS = new Set([
+        "--depth", "-b", "--branch", "--filter", "--separate-git-dir",
+        "--template", "-j", "--jobs", "--shallow-since", "--shallow-exclude",
+      ]);
+      const toks = rest.slice(1);
+      const pos: string[] = [];
+      for (let i = 0; i < toks.length; i++) {
+        const t = toks[i]!;
+        if (t.startsWith("--") && t.includes("=")) {
+          continue; // --depth=1 form
+        }
+        if (VALUE_FLAGS.has(t)) {
+          i++; // skip the flag's value
+          continue;
+        }
+        if (isFlagToken(t)) {
+          continue;
+        }
+        pos.push(t);
+      }
       const url = pos[0];
       if (!url) {
         return;
@@ -336,10 +357,24 @@ function commandCreatedPaths(
 // operators first, then each segment is scanned for redirects and for one of
 // the creation command forms. Results may be relative (null cwd) or
 // cwd-resolved; the engine normalizes them like FileWrite paths.
-export function extractCreatedPaths(raw: string, cwd: string | null): string[] {
+//
+// `beforeFirstDelete` (M7v2 review Issue 1): when set, only creations from
+// segments positioned BEFORE the line's first delete command count — a
+// delete that runs BEFORE its "creation" (`rm -rf ~/work && mkdir ~/work`)
+// must not be whitewashed by provenance from later in the SAME line. Lines
+// with no delete keep their full creation set. Mixed lines under-count
+// (conservative direction, documented).
+export function extractCreatedPaths(
+  raw: string,
+  cwd: string | null,
+  opts?: { beforeFirstDelete?: boolean },
+): string[] {
+  const segments = splitCommandSegments(raw);
+  const limit =
+    opts?.beforeFirstDelete === true ? firstDeleteSegment(segments) : segments.length;
   const created: string[] = [];
-  for (const seg of splitCommandSegments(raw)) {
-    const trimmed = seg.trim();
+  for (let s = 0; s < limit && s < segments.length; s++) {
+    const trimmed = segments[s]!.trim();
     if (!trimmed) {
       continue;
     }
@@ -349,6 +384,30 @@ export function extractCreatedPaths(raw: string, cwd: string | null): string[] {
     }
   }
   return created;
+}
+
+// Index of the first segment whose command word is a delete verb (skipping
+// env assignments and sudo). segments.length when none.
+const DELETE_VERBS: ReadonlySet<string> = new Set([
+  "rm", "rd", "del", "erase", "rmdir", "remove-item",
+]);
+function firstDeleteSegment(segments: string[]): number {
+  for (let i = 0; i < segments.length; i++) {
+    for (const tok of segments[i]!.trim().split(/\s+/)) {
+      if (tok.includes("=")) {
+        continue; // env assignment prefix (FOO=1 rm ...)
+      }
+      const w = tok.toLowerCase();
+      if (w === "sudo" || w === "command" || w === "nohup") {
+        continue;
+      }
+      if (DELETE_VERBS.has(w)) {
+        return i;
+      }
+      break; // first real command word — not a delete
+    }
+  }
+  return segments.length;
 }
 
 // Filesystem-root-like targets are never provenance-covered: with P = "/" or
