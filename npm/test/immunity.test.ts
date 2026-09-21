@@ -232,3 +232,86 @@ test("toDict emits note only when set, appended LAST in key order", async () => 
   const rt = JSON.parse(JSON.stringify(dict));
   expect(Object.keys(rt.findings.find((f: { note?: string }) => f.note !== undefined)).pop()).toBe("note");
 });
+
+// ------------------------------------------- M7 review F1/F2 hardening tests --
+
+// F1: one sacrificial write must NOT whitewash mass deletion of a system tree.
+test("write into /etc then rm -rf /etc stays critical (sacrificial write)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Write", { file_path: "/etc/passwd", content: "x" }),
+      makeToolLine("Bash", { command: "rm -rf /etc" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("critical");
+  expect(f.note).toBeUndefined();
+});
+
+test("write under home root then rm -rf the user dir stays critical", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Write", { file_path: "/home/u/notes.txt", content: "x" }),
+      makeToolLine("Bash", { command: "rm -rf /home/u" }),
+    ]),
+  ]);
+  expect(find(result, "D001").severity).toBe("critical");
+});
+
+test("write inside a project then rm -rf the project dir downgrades (worksite)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Write", { file_path: "/home/u/proj/a.ts", content: "x" }),
+      makeToolLine("Bash", { command: "rm -rf /home/u/proj" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("info");
+  expect(f.note).toContain("回退");
+});
+
+// F2: generic artifact segments must not exempt system binary dirs.
+test("rm -rf /usr/bin and /bin stay critical (not build artifacts)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf /usr/bin" }),
+    ]),
+  ]);
+  expect(find(result, "D001").severity).toBe("critical");
+  const result2 = await runAudit([
+    writeJsonl(join(makeTmpDir(), "b.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf /bin" }),
+    ]),
+  ]);
+  expect(find(result2, "D001").severity).toBe("critical");
+});
+
+test("trailing bin segment still exempts a project-relative target", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf ./bin" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("info");
+  expect(f.note).toContain("构建产物");
+});
+
+test("mid-path generic segment does not exempt (~/Documents/out)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "rm -rf ~/Documents/out" }),
+    ]),
+  ]);
+  expect(find(result, "D001").severity).toBe("critical");
+});
+
+test("windows system path with prior write stays critical", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Write", { file_path: "C:/Windows/temp/x.txt", content: "x" }),
+      makeToolLine("Bash", { command: "rm -rf C:/Windows" }),
+    ]),
+  ]);
+  expect(find(result, "D001").severity).toBe("critical");
+});

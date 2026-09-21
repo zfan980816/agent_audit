@@ -165,6 +165,12 @@ export function renderTerminal(
   if (result.filesFailed) {
     out(pc.yellow(`failed to read ${result.filesFailed} file(s)`));
   }
+  // M7: exempted findings (info + note) are hidden by the default floor —
+  // surface the count so the downgrade is visible, never silent
+  const exempted = result.findings.filter((f) => f.note !== undefined).length;
+  if (exempted > 0) {
+    out(pc.dim(`${exempted} finding(s) exempted → info (agent-deleted own content / build artifacts)`));
+  }
   if (findings.length > 200) {
     out(pc.dim(`showing first 200 of ${findings.length} findings`));
   }

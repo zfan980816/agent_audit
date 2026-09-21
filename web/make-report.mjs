@@ -20,14 +20,16 @@ const outIdx = args.indexOf("--out");
 const out = outIdx >= 0 ? args[outIdx + 1] : resolve(ROOT, "..", "agent-audit-report.html");
 const passthrough = args.filter((a, i) => a !== "--demo" && a !== "--out" && i !== outIdx + 1 && (outIdx < 0 || i !== outIdx));
 
-// Prefer the globally installed CLI; fall back to the local build.
+// Prefer the LOCAL build (always current with the repo — the M7 review found
+// the global install lagging a published version, silently dropping notes);
+// fall back to the globally installed CLI.
 // --severity info: the report must INCLUDE the M7-exempted findings (D001
 // downgraded to info with an exemption note) so the dashboard can show the
 //「已豁免」badge — the CLI's default floor "low" would filter them out.
 function runAudit() {
   const candidates = [
-    ["agent-audit", [...(demo ? ["--demo"] : []), "--json", "--severity", "info", ...passthrough]],
     [process.execPath, [resolve(ROOT, "npm", "dist", "cli.js"), ...(demo ? ["--demo"] : []), "--json", "--severity", "info", ...passthrough]],
+    ["agent-audit", [...(demo ? ["--demo"] : []), "--json", "--severity", "info", ...passthrough]],
   ];
   for (const [cmd, argv] of candidates) {
     const r = spawnSync(cmd, argv, { encoding: "utf8", shell: process.platform === "win32", env: { ...process.env, NO_COLOR: "1" } });
