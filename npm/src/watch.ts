@@ -337,7 +337,10 @@ export async function runWatch(
         if (!opts.procs.includes(c.proc)) {
           continue; // defensive: the real poller filters already
         }
-        const key = `${c.proc}|${c.ip}|${c.port}`;
+        // dedupe on pid (prototype parity): two same-named processes (IDE
+        // main + extension host, node helpers) hitting the same endpoint are
+        // distinct connections and must both be reported
+        const key = `${c.pid}|${c.ip}|${c.port}`;
         if (seen.has(key)) {
           continue;
         }

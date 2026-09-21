@@ -60,7 +60,7 @@ Python 3.10+ alternative: `uvx agent-audit` (no install) or
 ## Watch mode (v0.2.x, Windows only)
 
 Besides auditing history, agent-audit can also watch what your AI coding
-tools are connecting to RIGHT NOW: it polls the TCP table every ~0.7s for the
+tools are connecting to RIGHT NOW: it polls the TCP table (each poll spawns a PowerShell query — effective cadence is a few seconds) for the
 watched processes' established connections, labels each target against a
 built-in registry of known-agent domains (`model-api` / `telemetry` /
 `update` / `captcha` / `community`), and alerts on anything outside it.

@@ -64,10 +64,10 @@ export const DOMAIN_RULES: readonly DomainRule[] = [
   { match: "generativelanguage.googleapis.com", category: "model-api", note: "Gemini API (well-known, not in research docs)" },
 
   // ---- telemetry: metrics/APM/RUM channels ----
-  { match: /\.log\.aliyuncs\.com$/, category: "telemetry", note: "Aliyun log service: ZCode ARMS RUM /rum/web/v2 + OTel APM endpoints live here (forensics doc 2.2, hardcoded proj-xtrace-...cn-beijing)" },
+  { match: /\.log\.aliyuncs\.com$/, category: "telemetry", note: "Aliyun log-service family (all regions): ZCode's ARMS RUM /rum/web/v2 + OTel APM live here — forensics doc observed the hardcoded cn-beijing host; same service family across regions" },
   { match: "statsig.anthropic.com", category: "telemetry", note: "Claude Code metrics/feature-flags (well-known, not in research docs)" },
   { match: "*.sentry.io", category: "telemetry", note: "Sentry crash/error reporting used by several agent tools (well-known, not in research docs)" },
-  { match: "collect.alipay.com", category: "telemetry", note: "Generic collect endpoint named in the M5 design decisions" },
+  { match: "collect.alipay.com", category: "telemetry", note: "Alipay analytics/telemetry collector (well-known endpoint, not in research docs)" },
 
   // ---- update/pki: component downloads and certificate chains ----
   { match: "*.gvt1.com", category: "update", note: "Chrome component/spell-dictionary downloads (forensics doc 4.1, DNS cache observed)" },

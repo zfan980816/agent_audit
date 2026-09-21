@@ -65,7 +65,7 @@ function makeDeps(
   return { deps, lines, csv, clock, calls: () => i };
 }
 
-test("records each new connection once (dedupe on proc|ip|port)", async () => {
+test("records each new connection once (dedupe on pid|ip|port)", async () => {
   const state = makeDeps([
     {
       conns: [ZCODE_CONN, { ...ZCODE_CONN, ip: "1.2.3.4" }],
@@ -96,6 +96,21 @@ test("records each new connection once (dedupe on proc|ip|port)", async () => {
     category: "unknown",
     note: "no DNS mapping observed",
   });
+});
+
+// M5 review F2: two same-named processes (different pids) hitting the SAME
+// endpoint are distinct connections — dedupe keys on pid, not proc name.
+test("same-name different-pid connections to one endpoint both recorded", async () => {
+  const state = makeDeps([
+    {
+      conns: [ZCODE_CONN, { ...ZCODE_CONN, pid: 9999 }],
+      dns: [{ host: "zcode.z.ai", ip: "124.160.144.209" }],
+    },
+  ]);
+  const result = await runWatch({ procs: ["ZCode"], seconds: 1 }, state.deps);
+  expect(result.connections).toHaveLength(2);
+  expect(result.connections.map((c) => c.pid)).toEqual([7600, 9999]);
+  expect(state.lines).toHaveLength(2);
 });
 
 test("labels connections via the DNS sample and marks unknown IPs", async () => {

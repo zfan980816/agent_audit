@@ -46,10 +46,11 @@ Python 3.10+ 备选:`uvx agent-audit`(免安装)或 `pipx install agent-audit`
 
 ## Watch 模式(v0.2.x,仅 Windows)
 
-除了审计历史记录,agent-audit 还能监视 AI 编码工具**此刻**连到哪里:每
-约 0.7 秒轮询一次 TCP 表,抓取被监视进程的已建立连接,按内置的已知
-agent 域名注册表(`model-api` / `telemetry` / `update` / `captcha` /
-`community`)标注每个目标,白名单之外的新目标即时告警 `[!]`。
+除了审计历史记录,agent-audit 还能监视 AI 编码工具**此刻**连到哪里:轮
+询 TCP 表(每次轮询拉起一个 PowerShell 查询,实际节奏为几秒),抓取被
+监视进程的已建立连接,按内置的已知 agent 域名注册表(`model-api` /
+`telemetry` / `update` / `captcha` / `community`)标注每个目标,白名单
+之外的新目标即时告警 `[!]`。
 
 ```bash
 agent-audit --watch                          # 监视所有已知 AI 工具,60 秒
