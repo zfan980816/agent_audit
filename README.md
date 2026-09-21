@@ -94,7 +94,7 @@ Exit codes: `0` on success (findings do NOT change the exit code yet — a
 `--footprint` answers a different question than the audit: not "what did an
 agent DO" but "what does a tool hold FROM you". For Qoder CN it inventories
 the local index stores under `~/.qoder-cn/shared_client/`: per repo it reads
-the vector index's chunk table (absolute file paths + line ranges — metadata
+the vector index's chunk table (absolute file paths — metadata
 only), counts completion-index `.zap` segments (which hold recoverable source
 text — reported as files + bytes, never opened), git/graph index sizes,
 project-memory file names, and workspace memory notes.
@@ -108,6 +108,18 @@ agent-audit --footprint --agent qoder    # explicit (only qoder in v0.2.x)
 Privacy: the report LISTS what was collected (repos, file paths, chunk
 counts, index timestamps) — it never reads or prints file CONTENT. Exits 2
 for any other `--agent`.
+
+## Non-goals (v0.2.x, stated plainly)
+
+- **A tool's own background network traffic at content level**: TLS-encrypted
+  on the wire; `--watch` reports WHO it talks to, not WHAT it sends. For
+  content-level proof use the canary method (unique marker strings planted in
+  a throwaway repo, then searched in the tool's local stores and captured
+  traffic).
+- **Trae chat history**: stored locally in an encrypted database — not
+  auditable until the format opens up.
+- **Qoder chat history**: lives server-side; only the local data footprint
+  (see `--footprint`) is visible.
 
 ## Implementation note
 
