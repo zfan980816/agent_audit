@@ -104,7 +104,7 @@ v0.2 用 TypeScript 重写了本工具(`npm/`)作为规范实现——在 v0.1 �
 ## 路线图
 
 - v0.2:已完成——TypeScript/npm 规范移植(v0.1 输出面等价)
-- v0.2.x:支持 Codex CLI / Gemini CLI,SARIF 导出
+- v0.2.x:Codex CLI 适配已完成(0.3.0)· Gemini CLI 待一次真会话验证 · SARIF 导出
 - v0.3:guard 模式——在危险操作执行前拦截(PreToolUse hook)
 
 ## 许可

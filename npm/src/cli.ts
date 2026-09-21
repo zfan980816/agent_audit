@@ -37,7 +37,7 @@ import {
 
 // Keep in sync with npm/package.json "version" (importing package.json would
 // need JSON import attributes, which Node 18 does not support).
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 export interface MainIo {
   stdout?: WriteFn;
