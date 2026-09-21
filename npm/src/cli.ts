@@ -20,6 +20,7 @@ import { writeDemoSession } from "./demo.js";
 import { DataDirNotFoundError, comparePaths } from "./discovery.js";
 import { runAudit } from "./engine.js";
 import { SEVERITY_ORDER, type Severity } from "./events.js";
+import { qoderFootprint, renderFootprint } from "./footprint.js";
 import type { WriteFn } from "./report.js";
 import { SEV_LABEL, renderTerminal, shareCard, toDict } from "./report.js";
 import { CATEGORY_TITLES, allRules } from "./rules/index.js";
@@ -63,6 +64,8 @@ interface AuditFlags {
   proc?: string;
   seconds?: string;
   csv?: string;
+  // M6 footprint mode (TS-only inventory report)
+  footprint?: boolean;
 }
 
 const description =
@@ -99,7 +102,7 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
     .option("--list-rules", "List all rules and exit")
     .option(
       "--agent <ids>",
-      "Agents to audit, comma separated: claude-code|kimi|codex|zcode|all",
+      "Agents to audit, comma separated: claude-code|kimi|codex|zcode|all (--footprint: qoder only)",
       "all",
     )
     .option("--list-agents", "List known agents and exit")
@@ -119,6 +122,13 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
       String(WATCH_DEFAULT_SECONDS),
     )
     .option("--csv <path>", "Watch: append one CSV row per new connection")
+    // M6 footprint mode: local-data inventory report (Qoder CN only in
+    // v0.2.x). Like --watch, a MODE on the single-command CLI: audit flags
+    // do not apply. The positional [path] overrides the Qoder data root.
+    .option(
+      "--footprint",
+      "Inventory what a tool collected locally (Qoder index stores)",
+    )
     .option("--version", "Show version")
     .action(async (pathArg: string | undefined, opts: OptionValues) => {
       exitCode = await auditCommand(
@@ -160,6 +170,11 @@ async function auditCommand(
   // M5: watch is a mode on this command; audit flags below do not apply.
   if (opts.watch) {
     return watchCommand(opts, stdout, stderr, watchInject);
+  }
+  // M6: footprint is a mode too (checked before the watch-flag hint below so
+  // `--footprint` never falls through into an audit).
+  if (opts.footprint) {
+    return footprintCommand(opts, pathArg, stdout, stderr);
   }
   if (opts.proc !== undefined || opts.csv !== undefined) {
     // common typo guard: --proc/--csv silently doing nothing would confuse
@@ -382,6 +397,39 @@ async function watchCommand(
   } finally {
     process.removeListener("SIGINT", onSigint);
   }
+}
+
+// M6 footprint mode: inventory the local index stores of one tool (Qoder CN
+// only in v0.2.x — anything else exits 2 with the reason). NOT an audit: the
+// report lists what the tool collected (repos, file paths, counts, times);
+// see src/footprint.ts for the privacy posture. The positional [path]
+// overrides the tool's default data root (also how tests point at fixtures).
+function footprintCommand(
+  opts: AuditFlags,
+  pathArg: string | undefined,
+  stdout: WriteFn,
+  stderr: WriteFn,
+): number {
+  const ids = opts.agent
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // "all" is the commander default, i.e. literally the bare `--footprint`
+  // form — it maps to the only supported tool, qoder.
+  const unsupported = ids.filter((id) => id !== "qoder" && id !== "all");
+  if (unsupported.length > 0) {
+    stderr(
+      `error: footprint only supports --agent qoder in v0.2.x (got: ${unsupported.join(", ")})\n`,
+    );
+    return 2;
+  }
+  const report = qoderFootprint(pathArg);
+  if (opts.json) {
+    stdout(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    stdout(renderFootprint(report));
+  }
+  return 0;
 }
 
 // Bin wiring: run only when invoked directly as `node dist/cli.js` (or via the

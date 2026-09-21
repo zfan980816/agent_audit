@@ -34,6 +34,7 @@ agent-audit --severity high --rules E,C
 agent-audit --session <id> # 仅审计单个会话
 agent-audit --share       # 输出可分享的摘要卡
 agent-audit --watch       # 实时出网监视(Windows;见下文)
+agent-audit --footprint   # Qoder 本地收集了什么(见下文)
 ```
 
 Python 3.10+ 备选:`uvx agent-audit`(免安装)或 `pipx install agent-audit`
@@ -70,6 +71,23 @@ by category: model-api 1 · unknown 2
 主机名来自监视窗口内采样的 Windows DNS 缓存——期间从未解析过的 IP 如实
 上报为 unknown,绝不按 IP 段猜测。Ctrl+C 提前停止时同样输出摘要。非
 Windows 平台上 `--watch` 以退出码 2 结束(`watch: Windows-only in v0.2.x`)。
+
+## Footprint 模式(v0.2.x):Qoder 收集了你什么?
+
+`--footprint` 回答的是与审计不同的问题:不是"agent 做了什么",而是"工具从
+你这里拿走了什么"。对 Qoder CN,它盘点 `~/.qoder-cn/shared_client/` 下的本
+地索引库:逐仓库读取向量索引的 chunk 表(绝对文件路径 + 行区间——仅元数
+据)、统计补全索引 `.zap` 段(内含可还原的源码文本——只报文件数与字节数,
+绝不打开)、git/graph 索引规模、项目记忆文件名清单与工作区记忆条数。
+
+```bash
+agent-audit --footprint                  # 盘点 ~/.qoder-cn
+agent-audit --footprint --json           # 机器可读(含文件清单)
+agent-audit --footprint --agent qoder    # 显式指定(v0.2.x 仅支持 qoder)
+```
+
+隐私:报告只**列出**收集了什么(仓库、文件路径、chunk 数、索引时间)——
+绝不读取或输出文件**内容**。其他 `--agent` 一律退出码 2。
 
 ## 实现说明
 

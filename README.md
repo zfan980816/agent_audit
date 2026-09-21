@@ -49,6 +49,7 @@ agent-audit --severity high --rules E,C
 agent-audit --session <id> # one session only
 agent-audit --share        # print a shareable summary card
 agent-audit --watch        # LIVE egress monitor (Windows; see below)
+agent-audit --footprint    # what Qoder indexed locally (see below)
 ```
 
 Python 3.10+ alternative: `uvx agent-audit` (no install) or
@@ -87,6 +88,26 @@ with code 2 (`watch: Windows-only in v0.2.x`).
 
 Exit codes: `0` on success (findings do NOT change the exit code yet — a
 `--fail-on` flag is planned), `2` on bad options or missing data dir.
+
+## Footprint mode (v0.2.x): what has Qoder collected?
+
+`--footprint` answers a different question than the audit: not "what did an
+agent DO" but "what does a tool hold FROM you". For Qoder CN it inventories
+the local index stores under `~/.qoder-cn/shared_client/`: per repo it reads
+the vector index's chunk table (absolute file paths + line ranges — metadata
+only), counts completion-index `.zap` segments (which hold recoverable source
+text — reported as files + bytes, never opened), git/graph index sizes,
+project-memory file names, and workspace memory notes.
+
+```bash
+agent-audit --footprint                  # inventory ~/.qoder-cn
+agent-audit --footprint --json           # machine-readable (includes the file list)
+agent-audit --footprint --agent qoder    # explicit (only qoder in v0.2.x)
+```
+
+Privacy: the report LISTS what was collected (repos, file paths, chunk
+counts, index timestamps) — it never reads or prints file CONTENT. Exits 2
+for any other `--agent`.
 
 ## Implementation note
 
