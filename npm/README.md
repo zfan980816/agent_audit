@@ -7,7 +7,7 @@ dangerous action your agents ever took — destructive commands, credential
 access, data exfiltration, persistence installs, unsafe downloads.
 
 ```bash
-npx agent-audit         # audit ~/.claude/projects immediately
+npx @fanzhen/agent-audit # audit ~/.claude/projects immediately
 agent-audit --demo      # no Claude Code? try the built-in demo
 ```
 
@@ -41,7 +41,7 @@ were disclosed. Nobody reviews what their agent already did — until now.
 Requires Node 18+.
 
 ```bash
-npx agent-audit            # run without installing, or: npm i -g agent-audit
+npx @fanzhen/agent-audit   # run without installing, or: npm i -g @fanzhen/agent-audit
 agent-audit                # audit default location
 agent-audit ~/somewhere    # audit a custom projects dir / .jsonl file
 agent-audit --json         # machine-readable output

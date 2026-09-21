@@ -126,7 +126,7 @@ test("share card lines", async () => {
   const card = shareCard(result);
   expect(card).toContain("agent-audit");
   expect(card).toContain("CRITICAL 1");
-  expect(card).toContain("npx agent-audit");
+  expect(card).toContain("npx @fanzhen/agent-audit");
   // exact three lines; zero-count severities omitted
   const lines = card.split("\n");
   expect(lines).toHaveLength(3);

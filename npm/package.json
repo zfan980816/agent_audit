@@ -1,11 +1,14 @@
 {
-  "name": "agent-audit",
+  "name": "@fanzhen/agent-audit",
   "version": "0.3.0",
   "description": "npm audit for your AI coding agents - audit dangerous actions in agent session history",
   "license": "MIT",
   "type": "module",
   "bin": {
     "agent-audit": "dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=18"

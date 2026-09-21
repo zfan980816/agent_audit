@@ -75,7 +75,7 @@ test("demo terminal and share", async () => {
   const code = await main(["--demo", "--share"], io);
   expect(code).toBe(0);
   expect(io.out()).toContain("agentaudit");
-  expect(io.out()).toContain("npx agent-audit");
+  expect(io.out()).toContain("npx @fanzhen/agent-audit");
   // ledger M: non-TTY stdout must render ANSI-free (rich gates on isatty;
   // picocolors bakes the decision in at import time).
   expect(io.out()).not.toContain("\u001b[");

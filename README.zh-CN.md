@@ -5,7 +5,7 @@
 一条命令扫描本机 Claude Code 会话历史,报告你的 Agent 曾经做过的每一个危险操作:破坏性命令、凭证访问、数据外发、持久化植入、危险下载。
 
 ```bash
-npx agent-audit         # 立即审计 ~/.claude/projects
+npx @fanzhen/agent-audit # 立即审计 ~/.claude/projects
 agent-audit --demo      # 没装 Claude Code?跑内置演示
 ```
 
@@ -26,7 +26,7 @@ agent-audit --demo      # 没装 Claude Code?跑内置演示
 需要 Node 18+。
 
 ```bash
-npx agent-audit           # 免安装直接运行,或:npm i -g agent-audit
+npx @fanzhen/agent-audit   # 免安装直接运行,或:npm i -g @fanzhen/agent-audit
 agent-audit               # 审计默认目录
 agent-audit ~/somewhere   # 审计自定义 projects 目录 / .jsonl 文件
 agent-audit --json        # 机器可读输出

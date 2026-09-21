@@ -245,6 +245,6 @@ export function shareCard(result: AuditResult): string {
   return (
     "──── agent-audit · AI agent safety report ────\n" +
     `Sessions: ${result.sessions.size}   ${stats}\n` +
-    "Audit your own agents → npx agent-audit"
+    "Audit your own agents → npx @fanzhen/agent-audit"
   );
 }
