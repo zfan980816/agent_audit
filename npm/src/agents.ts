@@ -8,7 +8,10 @@
 //     an audit. The CLI demotes a missing DEFAULT root to a stderr hint when
 //     several agents are selected, and keeps failing loudly for an explicit
 //     path the user pointed at.
-import { existsSync, readdirSync } from "node:fs";
+//   - zcode.find() follows the kimi policy (missing store -> []) plus a
+//     node:sqlite runtime gate: without the builtin it returns [] with a
+//     single stderr hint (parsers/zcode.ts rejects loudly if called anyway).
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +23,7 @@ import {
 } from "./parsers/claude-code.js";
 import { iterEvents as iterCodexEvents } from "./parsers/codex.js";
 import { iterEvents as iterKimiEvents } from "./parsers/kimi.js";
+import { iterEvents as iterZcodeEvents, loadNodeSqlite } from "./parsers/zcode.js";
 
 export interface AgentParser {
   iterEvents(path: string, stats?: ParseStats): AsyncGenerator<Event>;
@@ -124,6 +128,52 @@ function findCodexSessionFiles(root?: string | null): string[] {
   return out.sort(comparePaths);
 }
 
+// ZCode (Z.ai desktop IDE) session store — ONE sqlite db file, not a tree:
+//   ~/.zcode/cli/db/db.sqlite (+ live -wal/-shm siblings; the parser copies
+//   them before reading, see parsers/zcode.ts). Explicit roots: the db file
+//   itself, or a directory containing db.sqlite.
+export function defaultZcodeDbPath(): string {
+  // Python parity with discovery.default_claude_projects_dir: Path.home()/...
+  return join(homedir(), ".zcode", "cli", "db", "db.sqlite");
+}
+
+// node:sqlite availability hint must print at most once per process even if
+// find() runs several times (--list-agents, multi-agent discovery).
+let zcodeGateHinted = false;
+
+function findZcodeSessionFiles(root?: string | null): string[] {
+  let target: string;
+  if (root) {
+    let isFile = false;
+    try {
+      isFile = statSync(root).isFile();
+    } catch {
+      // not stat-able -> treat as a directory and look for db.sqlite inside
+    }
+    target = isFile ? root : join(root, "db.sqlite");
+  } else {
+    target = defaultZcodeDbPath();
+  }
+  if (!existsSync(target)) {
+    return []; // optional agent: silent skip, NOT an error
+  }
+  // Runtime gate: the store is sqlite, so without the node:sqlite builtin
+  // (Node >= 22.5) there is no way to read it. Skip for `all` runs with a
+  // single stderr hint (stderr keeps --json stdout pure); an explicitly
+  // pointed-at path still yields [] here — the parser itself rejects loudly
+  // when called directly without the builtin.
+  if (loadNodeSqlite() === null) {
+    if (!zcodeGateHinted) {
+      zcodeGateHinted = true;
+      process.stderr.write(
+        "zcode: node:sqlite unavailable on this Node runtime (>= 22.5 required); skipping the ZCode store\n",
+      );
+    }
+    return [];
+  }
+  return [target];
+}
+
 export const AGENTS: Record<string, AgentDescriptor> = {
   "claude-code": {
     id: "claude-code",
@@ -142,6 +192,12 @@ export const AGENTS: Record<string, AgentDescriptor> = {
     displayName: "Codex CLI",
     find: (root?: string) => findCodexSessionFiles(root),
     parser: { iterEvents: (path: string, stats?: ParseStats) => iterCodexEvents(path, stats) },
+  },
+  zcode: {
+    id: "zcode",
+    displayName: "ZCode",
+    find: (root?: string) => findZcodeSessionFiles(root),
+    parser: { iterEvents: (path: string, stats?: ParseStats) => iterZcodeEvents(path, stats) },
   },
 };
 
