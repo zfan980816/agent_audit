@@ -3,11 +3,13 @@
 // keeps this a TS-only behavior (corpora avoid exempt patterns; per-finding
 // `note` is normalized out of the parity comparison).
 //
-// Two exemption families, both D001-only (spec rule 3: D002-D005 and every
+// Three exemption families, all D001-only (spec rule 3: D002-D005 and every
 // E/C/B/U rule NEVER downgrade — privacy signals stay at full severity):
 //   1. write provenance: the deleted targets are covered by the paths this
-//      session wrote earlier in the same audit run (stream order, like E005's
-//      state) → info +「删除的是本会话创建的内容(回退/清理)」
+//      session created earlier in the same audit run (stream order, like
+//      E005's state) — FileWrite paths AND M7v2 Bash-creation outputs
+//      (mkdir/touch/redirect/tee/cp/mv/git clone/curl -o; see
+//      extractCreatedPaths) → info +「删除的是本会话创建的内容(回退/清理)」
 //   2. build artifacts: every deleted target has a path segment in the
 //      well-known artifact-dir set → info +「删除的是构建产物目录」
 import { ShellCommand } from "./events.js";
@@ -72,9 +74,15 @@ export const EXEMPT_NOTE_SELF_CREATED = "删除的是本会话创建的内容(�
 export const EXEMPT_NOTE_BUILD_ARTIFACT = "删除的是构建产物目录";
 
 // Delete-command words and shell punctuation the crude tokenizer must not
-// mistake for targets (lowercase compare).
+// mistake for targets (lowercase compare). M7v2 adds the bash-creation verbs
+// plus the ubiquitous chain fillers (echo/cd): a same-line chain like
+// `mkdir /tmp/x && rm -rf /tmp/x` must not keep the word "mkdir" as a delete
+// target (which would rightly refuse coverage). Arguments of those chained
+// commands are still extracted, so `mkdir /other && rm -rf /tmp/x` stays
+// critical (the unrelated /other target does not qualify).
 const COMMAND_WORDS: ReadonlySet<string> = new Set([
   "rm", "rd", "del", "erase", "rmdir", "remove-item", "sudo", "git",
+  "mkdir", "touch", "tee", "cp", "mv", "curl", "wget", "echo", "cd",
 ]);
 const SHELL_PUNCT: ReadonlySet<string> = new Set([
   "&&", "||", ";", "|", "&", ">", ">>", "<", "(", ")", "{", "}",
@@ -114,6 +122,233 @@ export function extractDeleteTargets(raw: string): string[] {
 // (No case folding: over-matching an exemption is the dangerous direction.)
 export function normalizeForCompare(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+// ---------------------------------------------------------------------------
+// M7v2: bash-creation provenance. Parse a Bash command line for the paths it
+// CREATES, so outputs of mkdir/touch/redirect/tee/cp/mv/git clone/curl -o
+// count as "agent-created" for family 1 (the user-reported
+// 「他创建了内容又删除了」 pattern mostly happens via Bash, not Write).
+// This is provenance extraction, NOT a shell emulator: unknown forms simply
+// produce no provenance (fail-closed), and the same crude-tokenizer
+// discipline as extractDeleteTargets applies (whitespace split, quoted paths
+// containing spaces are not understood).
+
+// Bit-bucket redirect targets create nothing usable.
+const DEVNULL_TARGETS: ReadonlySet<string> = new Set(["/dev/null", "nul"]);
+
+function stripQuotes(t: string): string {
+  return t.replace(/^['"]+/, "").replace(/['"]+$/, "");
+}
+
+function isFlagToken(t: string): boolean {
+  return t.startsWith("-") || WINDOWS_SWITCH.test(t);
+}
+
+// Split a command line into segments on `&&`, `||`, `;`, `|`, `&` and newline.
+// Quotes are respected ("a && b" stays one segment). `|` vs `||` and `&` vs
+// `&&` each split once. A `&` DIRECTLY after `>` is an fd dup (`2>&1`), not a
+// separator.
+function splitCommandSegments(raw: string): string[] {
+  const segs: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (quote) {
+      cur += ch;
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (ch === "\n") {
+      segs.push(cur);
+      cur = "";
+      continue;
+    }
+    if (ch === ";") {
+      segs.push(cur);
+      cur = "";
+      continue;
+    }
+    if (ch === "&" || ch === "|") {
+      if (ch === "&" && cur.trimEnd().slice(-1) === ">") {
+        cur += ch; // 2>&1 — fd duplication, not a command separator
+        continue;
+      }
+      segs.push(cur);
+      cur = "";
+      if (raw[i + 1] === ch) {
+        i += 1; // && / || consume both characters
+      }
+      continue;
+    }
+    cur += ch;
+  }
+  segs.push(cur);
+  return segs;
+}
+
+// M7v2 design: relative creations resolve against the creating command's cwd
+// (engine passes ShellCommand.cwd); null cwd keeps them relative, and a
+// relative result then only matches a relative delete target (same as today).
+function resolveAgainstCwd(p: string, cwd: string | null): string {
+  if (!cwd || isAnchored(p)) {
+    return p;
+  }
+  const base = normalizeForCompare(cwd);
+  if (isRootLike(base)) {
+    return p;
+  }
+  return `${base}/${p.replace(/^(?:\.\/)+/, "")}`;
+}
+
+// Redirect targets share the creation filters; junk tokens (`&2` fd dups,
+// flags, bit buckets, anything with leftover operators) never count.
+function pushCreatedTarget(t: string, created: string[], cwd: string | null): void {
+  if (!t || t.includes(">") || t.includes("<")) {
+    return;
+  }
+  if (t.startsWith("&") || t.startsWith("-")) {
+    return;
+  }
+  if (DEVNULL_TARGETS.has(t.toLowerCase())) {
+    return;
+  }
+  created.push(resolveAgainstCwd(t, cwd));
+}
+
+// git clone without an explicit dir creates basename(url) minus .git
+// (https and scp forms both end in a "/"-separated project name).
+function gitCloneBasename(url: string): string {
+  const last = url.replace(/\/+$/, "").split("/").pop() ?? "";
+  return last.replace(/\.git$/i, "");
+}
+
+// Scan ONE segment: extract redirect-created paths (pushed into `created`)
+// and return the positional args for the command-form dispatch below.
+// Redirect anatomy per token: [fd prefix][> or >>][target] — fd-prefixed
+// forms (`2>`, `&>`, `2>&1`) are skipped whole, bare `>`/`>>` take the NEXT
+// token as target, attached `>f`/`>>f` take the token tail.
+function scanSegment(
+  seg: string,
+  created: string[],
+  cwd: string | null,
+): string[] {
+  const args: string[] = [];
+  let expectRedirectTarget = false;
+  for (const tok of seg.trim().split(/\s+/)) {
+    if (!tok) {
+      continue;
+    }
+    if (expectRedirectTarget) {
+      expectRedirectTarget = false;
+      pushCreatedTarget(stripQuotes(tok), created, cwd);
+      continue;
+    }
+    const m = /^([\d&]*)(>>?)(.*)$/.exec(tok);
+    if (!m) {
+      args.push(stripQuotes(tok));
+      continue;
+    }
+    if (m[1]) {
+      continue; // fd-prefixed (2>, &>, 2>&1, &>): token AND target skipped
+    }
+    if (!m[3]) {
+      expectRedirectTarget = true; // bare > / >> as its own token
+      continue;
+    }
+    pushCreatedTarget(stripQuotes(m[3]), created, cwd); // attached >f / >>f
+  }
+  return args;
+}
+
+// Command-form dispatch (high-frequency forms only). `args[0]` is the command
+// word; every form resolves through pushCreatedTarget, so cwd resolution and
+// the junk filters apply uniformly.
+function commandCreatedPaths(
+  args: string[],
+  created: string[],
+  cwd: string | null,
+): void {
+  const cmd = (args[0] ?? "").toLowerCase();
+  const rest = args.slice(1);
+  switch (cmd) {
+    case "mkdir":
+    case "touch":
+      for (const a of rest) {
+        if (!isFlagToken(a)) {
+          pushCreatedTarget(a, created, cwd);
+        }
+      }
+      return;
+    case "tee": {
+      const f = rest.find((a) => !isFlagToken(a));
+      if (f !== undefined) {
+        pushCreatedTarget(f, created, cwd);
+      }
+      return;
+    }
+    case "cp":
+    case "mv": {
+      const pos = rest.filter((a) => !isFlagToken(a));
+      if (pos.length >= 2) {
+        pushCreatedTarget(pos[pos.length - 1]!, created, cwd); // dst only
+      }
+      return;
+    }
+    case "git": {
+      if ((rest[0] ?? "").toLowerCase() !== "clone") {
+        return;
+      }
+      const pos = rest.slice(1).filter((a) => !isFlagToken(a));
+      const url = pos[0];
+      if (!url) {
+        return;
+      }
+      // dir if given, else basename(url) minus .git
+      const dir = pos.length >= 2 ? pos[pos.length - 1]! : gitCloneBasename(url);
+      if (dir) {
+        pushCreatedTarget(dir, created, cwd);
+      }
+      return;
+    }
+    case "curl":
+    case "wget": {
+      const outFlag = cmd === "curl" ? "-o" : "-O";
+      const idx = rest.indexOf(outFlag);
+      const file = idx >= 0 ? rest[idx + 1] : undefined;
+      if (file !== undefined && !isFlagToken(file)) {
+        pushCreatedTarget(file, created, cwd);
+      }
+      return;
+    }
+  }
+}
+
+// Paths a Bash command line CREATES (M7v2). Segments are split on the shell
+// operators first, then each segment is scanned for redirects and for one of
+// the creation command forms. Results may be relative (null cwd) or
+// cwd-resolved; the engine normalizes them like FileWrite paths.
+export function extractCreatedPaths(raw: string, cwd: string | null): string[] {
+  const created: string[] = [];
+  for (const seg of splitCommandSegments(raw)) {
+    const trimmed = seg.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const args = scanSegment(trimmed, created, cwd);
+    if (args.length > 0) {
+      commandCreatedPaths(args, created, cwd);
+    }
+  }
+  return created;
 }
 
 // Filesystem-root-like targets are never provenance-covered: with P = "/" or
@@ -156,6 +391,25 @@ function hasArtifactSegment(target: string): boolean {
   });
 }
 
+// M7v2 coverage forms for one delete target: its raw (normalized) form plus,
+// when the deleting command has a cwd and the target is relative, the
+// cwd-resolved absolute form. Creations resolve at creation time
+// (extractCreatedPaths), so this symmetric resolution is what lets
+// `git clone url` + `rm -rf r` in the same record cwd match; with a null cwd
+// only the relative form exists and relative still matches only relative
+// (same as today). The artifact-segment family keeps judging the RAW form —
+// `Remove-Item bin` must stay exempt while a resolved `D:/cwd/bin` would not.
+function targetCoverageForms(target: string, cwd: string | null): string[] {
+  const forms = [target];
+  if (cwd && !isAnchored(target)) {
+    const resolved = normalizeForCompare(resolveAgainstCwd(target, cwd));
+    if (resolved !== target) {
+      forms.push(resolved);
+    }
+  }
+  return forms;
+}
+
 // Mutates `finding` in place when the exemption applies. Called by the engine
 // right after rule.check() and BEFORE the severity sort, so both the sort and
 // by_severity naturally reflect the downgrade.
@@ -166,14 +420,21 @@ export function applyCreatorImmunity(
   if (finding.ruleId !== "D001") {
     return; // spec rule 3: only D001 participates
   }
-  const raw = finding.event instanceof ShellCommand ? finding.event.raw : "";
+  const event = finding.event instanceof ShellCommand ? finding.event : null;
+  const raw = event ? event.raw : "";
   const targets = extractDeleteTargets(raw).map(normalizeForCompare);
   if (targets.length === 0) {
     return;
   }
   // Conservative multi-target semantics: EVERY extracted target must qualify,
   // so `rm -rf ~/Documents node_modules` stays critical.
-  if (written !== undefined && targets.every((t) => isCoveredBy(t, written))) {
+  const cwd = event ? event.cwd : null;
+  if (
+    written !== undefined &&
+    targets.every((t) =>
+      targetCoverageForms(t, cwd).some((f) => isCoveredBy(f, written)),
+    )
+  ) {
     finding.severity = "info";
     finding.note = EXEMPT_NOTE_SELF_CREATED;
     return;

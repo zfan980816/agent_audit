@@ -4,8 +4,8 @@
 // claude-code parser, keeping every v0.1 caller/test unchanged) or
 // {agent, path} tags routed through the agent registry.
 import { AGENTS, type AgentFileEntry } from "./agents.js";
-import { FileWrite, SEVERITY_ORDER } from "./events.js";
-import { applyCreatorImmunity, normalizeForCompare } from "./immunity.js";
+import { FileWrite, SEVERITY_ORDER, ShellCommand } from "./events.js";
+import { applyCreatorImmunity, extractCreatedPaths, normalizeForCompare } from "./immunity.js";
 import { ParseStats } from "./parsers/claude-code.js";
 import type { Finding } from "./rules/base.js";
 import { allRules } from "./rules/index.js";
@@ -77,6 +77,24 @@ export async function runAudit(
             writtenBySession.set(event.sessionId, written);
           }
           written.add(normalizeForCompare(event.path));
+        } else if (event instanceof ShellCommand) {
+          // M7v2: bash-creation provenance — paths this command line CREATES
+          // (mkdir/touch/redirect/tee/cp/mv/git clone/curl -o) join the same
+          // per-session set in stream order, so creations cover only LATER
+          // deletes. Documented choice: a command line's own created paths
+          // count for deletes EARLIER IN THE SAME LINE too (`mkdir x &&
+          // rm -rf x` is info) — the engine adds them before the rules run.
+          const created = extractCreatedPaths(event.raw, event.cwd);
+          if (created.length > 0) {
+            let written = writtenBySession.get(event.sessionId);
+            if (written === undefined) {
+              written = new Set();
+              writtenBySession.set(event.sessionId, written);
+            }
+            for (const p of created) {
+              written.add(normalizeForCompare(p));
+            }
+          }
         }
         for (const rule of rules) {
           if (!rule.appliesTo.some((ctor) => event instanceof ctor)) {

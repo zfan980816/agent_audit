@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { runAudit } from "../src/engine.js";
+import { extractCreatedPaths } from "../src/immunity.js";
 import { toDict } from "../src/report.js";
 import type { Finding } from "../src/rules/base.js";
 import { makeToolLine, makeTmpDir, writeJsonl } from "./helpers.js";
@@ -314,4 +315,179 @@ test("windows system path with prior write stays critical", async () => {
     ]),
   ]);
   expect(find(result, "D001").severity).toBe("critical");
+});
+
+// ------------------- M7v2: bash-creation provenance (extractCreatedPaths) --
+// Bash commands' OUTPUT paths count as "agent-created" for D001: the
+// 「他创建了内容又删除了」 pattern mostly happens via Bash (mkdir/touch/
+// redirect/tee/cp/mv/git clone/curl -o), not the Write tool. Unit tests pin
+// the parser forms; runAudit tests pin the engine integration + all guards.
+
+test("extractCreatedPaths parses the high-frequency creation forms", () => {
+  expect(extractCreatedPaths("mkdir -p /tmp/b", null)).toEqual(["/tmp/b"]);
+  expect(extractCreatedPaths("mkdir a b", null)).toEqual(["a", "b"]);
+  expect(extractCreatedPaths("touch x.log y.log", null)).toEqual(["x.log", "y.log"]);
+  expect(extractCreatedPaths("echo hi > f.txt", null)).toEqual(["f.txt"]);
+  expect(extractCreatedPaths("echo hi >> f.txt", null)).toEqual(["f.txt"]);
+  expect(extractCreatedPaths("echo hi >f.txt", null)).toEqual(["f.txt"]);
+  expect(extractCreatedPaths("cat a | tee out.log", null)).toEqual(["out.log"]);
+  expect(extractCreatedPaths("tee -a out.log", null)).toEqual(["out.log"]);
+  expect(extractCreatedPaths("cp a /tmp/keep/", null)).toEqual(["/tmp/keep/"]);
+  expect(extractCreatedPaths("mv -f b /tmp/moved", null)).toEqual(["/tmp/moved"]);
+  expect(extractCreatedPaths("git clone https://github.com/o/r /tmp/r", null)).toEqual(["/tmp/r"]);
+  expect(extractCreatedPaths("git clone https://github.com/o/r.git", null)).toEqual(["r"]);
+  expect(extractCreatedPaths("curl -sL x.sh -o /tmp/x.sh", null)).toEqual(["/tmp/x.sh"]);
+  expect(extractCreatedPaths("wget -q -O /tmp/w.bin https://x", null)).toEqual(["/tmp/w.bin"]);
+});
+
+test("extractCreatedPaths resolves relative results against cwd; null cwd keeps them relative", () => {
+  expect(extractCreatedPaths("mkdir sub", "D:\\demo")).toEqual(["D:/demo/sub"]);
+  expect(extractCreatedPaths("mkdir sub", "/home/u/proj")).toEqual(["/home/u/proj/sub"]);
+  expect(extractCreatedPaths("mkdir ./sub", "/home/u/proj")).toEqual(["/home/u/proj/sub"]);
+  expect(extractCreatedPaths("mkdir sub", null)).toEqual(["sub"]);
+});
+
+test("extractCreatedPaths splits chained commands on && ; | || and newlines (quote-aware)", () => {
+  expect(extractCreatedPaths("mkdir -p /tmp/b && cd /tmp/b && echo hi > f.txt", null)).toEqual([
+    "/tmp/b",
+    "f.txt",
+  ]);
+  expect(extractCreatedPaths("echo a; touch b; echo c | tee d", null)).toEqual(["b", "d"]);
+  expect(extractCreatedPaths("false || mkdir ok", null)).toEqual(["ok"]);
+  expect(extractCreatedPaths("mkdir a\ntouch b", null)).toEqual(["a", "b"]);
+  // quoted separator must not split
+  expect(extractCreatedPaths('echo "a && b" > q.txt', null)).toEqual(["q.txt"]);
+});
+
+test("extractCreatedPaths skips fd redirects and bit-bucket targets", () => {
+  expect(extractCreatedPaths("ls -la 2>/dev/null", null)).toEqual([]);
+  expect(extractCreatedPaths("cmd 2> err.log", null)).toEqual([]);
+  expect(extractCreatedPaths("cmd &>/dev/null", null)).toEqual([]);
+  expect(extractCreatedPaths("cmd 2>&1 >/tmp/real.log", null)).toEqual(["/tmp/real.log"]);
+  expect(extractCreatedPaths("echo x > /dev/null", null)).toEqual([]);
+  expect(extractCreatedPaths("echo x > nul", null)).toEqual([]);
+});
+
+test("bash-created dir (mkdir) then rm -rf downgrades with the self-created note", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "mkdir -p /tmp/b && cd /tmp/b && echo hi > f.txt" }),
+      makeToolLine("Bash", { command: "rm -rf /tmp/b" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("info");
+  expect(f.note).toContain("回退");
+  expect(toDict(result).summary.by_severity.critical).toBe(0);
+});
+
+test("redirect-created file then rm -rf downgrades (redirect provenance)", async () => {
+  // plain `rm` never fires D001 at all (the rule requires r+f), so the
+  // D001-grade single-file form is the observable channel here
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "echo x > /tmp/f.txt" }),
+      makeToolLine("Bash", { command: "rm -rf /tmp/f.txt" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("info");
+  expect(f.note).toContain("回退");
+});
+
+test("git clone then rm -rf downgrades: explicit dir and implicit basename (cwd-pinned)", async () => {
+  const explicit = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "git clone https://github.com/o/r /tmp/r" }),
+      makeToolLine("Bash", { command: "rm -rf /tmp/r" }),
+    ]),
+  ]);
+  expect(find(explicit, "D001").severity).toBe("info");
+
+  // implicit basename `r` is relative; the record cwd (default D:\demo) pins
+  // BOTH sides — creation resolves against the clone's cwd, the delete target
+  // gains a resolved coverage form against the rm's cwd
+  const implicit = await runAudit([
+    writeJsonl(join(makeTmpDir(), "b.jsonl"), [
+      makeToolLine("Bash", { command: "git clone https://github.com/o/r.git" }),
+      makeToolLine("Bash", { command: "rm -rf r" }),
+    ]),
+  ]);
+  const f = find(implicit, "D001");
+  expect(f.severity).toBe("info");
+  expect(f.note).toContain("回退");
+});
+
+test("curl -o download then rm -rf downgrades (download provenance)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "curl -sL x.sh -o /tmp/x.sh" }),
+      makeToolLine("Bash", { command: "rm -rf /tmp/x.sh" }),
+    ]),
+  ]);
+  expect(find(result, "D001").severity).toBe("info");
+});
+
+test("cp/mv destinations count as created; one rm covering both downgrades", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "cp a /tmp/keep/" }),
+      makeToolLine("Bash", { command: "mv b /tmp/moved" }),
+      makeToolLine("Bash", { command: "rm -rf /tmp/keep /tmp/moved" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("info");
+  expect(f.note).toContain("回退");
+});
+
+// ------------------------------------------------ M7v2 adversarial holds --
+
+test("mkdir /etc/trap then rm -rf /etc stays critical (denylist beats bash provenance)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "mkdir -p /etc/trap" }),
+      makeToolLine("Bash", { command: "rm -rf /etc" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("critical");
+  expect(f.note).toBeUndefined();
+});
+
+test("mkdir /home/u then rm -rf /home/u stays critical (home top-level)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "mkdir /home/u" }),
+      makeToolLine("Bash", { command: "rm -rf /home/u" }),
+    ]),
+  ]);
+  expect(find(result, "D001").severity).toBe("critical");
+});
+
+test("bash-create in session A + rm in session B stays critical (per-session provenance)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "mkdir -p /tmp/xs" }, { session: "sess-a" }),
+      makeToolLine("Bash", { command: "rm -rf /tmp/xs" }, { session: "sess-b" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("critical");
+  expect(f.note).toBeUndefined();
+});
+
+// Documented choice: creations earlier in the SAME command line count —
+// stream order is within-command here, so the engine adds a command line's
+// created paths to the provenance set before its own D001 check runs.
+test("chained create+delete in ONE command downgrades (same-line creations count)", async () => {
+  const result = await runAudit([
+    writeJsonl(join(makeTmpDir(), "a.jsonl"), [
+      makeToolLine("Bash", { command: "mkdir /tmp/x && rm -rf /tmp/x" }),
+    ]),
+  ]);
+  const f = find(result, "D001");
+  expect(f.severity).toBe("info");
+  expect(f.note).toContain("回退");
+  expect(toDict(result).summary.by_severity.critical).toBe(0);
 });
