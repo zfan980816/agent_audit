@@ -1,3 +1,5 @@
+<!-- GENERATED from the repository root README.md by npm/scripts/sync-readme.mjs — edit the root file, never this one. -->
+
 # agentaudit
 
 **npm audit for your AI coding agents.**
@@ -55,6 +57,7 @@ agent-audit --session <id> # one session only
 agent-audit --share        # print a shareable summary card
 agent-audit --watch        # LIVE egress monitor (Windows; see below)
 agent-audit --footprint    # what Qoder indexed locally (see below)
+agent-audit --canary       # did a tool secretly scan your disk? (see below)
 ```
 
 Python alternative: the original v0.1.1 implementation lives in `src/` as the
@@ -116,13 +119,68 @@ Privacy: the report LISTS what was collected (repos, file paths, chunk
 counts, index timestamps) — it never reads or prints file CONTENT. Exits 2
 for any other `--agent`.
 
+## Canary mode (v0.4.1): did a tool secretly scan your disk?
+
+The canary method is the content-level counterpart to `--watch` (which can
+only see who a tool talks to — the payload itself is TLS-encrypted). You
+plant a throwaway "canary" project containing a unique marker string and
+NEVER open it in any AI tool. The marker turning up inside a tool's local
+data directory is hard proof that tool read the project from disk on its
+own: covert disk scanning, caught red-handed.
+
+`--canary` scans all known tool data stores read-only (Qoder, ZCode, Trae,
+Kimi Code, Codex, Gemini, Cursor — including the CLI dirs) for the marker.
+The scan is binary-safe (latin1 byte match — it sees into `.zap` segments,
+sqlite and ldb pages, not just text), bounded (depth 8, 256MB per file), and
+carries a positive self-test on every run: it plants a marker in a temp
+store and demands the detector ring — if it can't, the run reports
+`RESULT:SELFTEST_FAILED` and exits 3 instead of a meaningless "clean".
+
+```bash
+agent-audit --canary                                   # default dir ~/canary-project
+agent-audit --canary --canary-dir D:\Projects\demo-inventory-sync
+agent-audit --canary --json                            # machine-readable report
+```
+
+```
+──── agent-audit canary ────
+canary project: D:\Projects\demo-inventory-sync (you never opened it in any AI tool)
+marker: ZCANARY-7F3A9C21-D4E8
+  ✓ Qoder(active root): clean
+  🚨 Trae: marker found x2 — it scanned your canary project!
+      C:\Users\you\AppData\Roaming\Trae CN\... @byte4815
+  · Kimi-Code: not installed, skipped
+  ...
+RESULT:CLEAN
+```
+
+Exit codes: `0` clean · `1` marker found · `2` canary project missing · `3`
+self-test failed.
+
+Setting up your own canary (do this per machine — the default marker string
+is a deploy-time constant, so generate your own):
+
+```powershell
+# 1. a per-machine marker
+powershell -Command "ZCANARY-" + [guid]::NewGuid().ToString("N").Substring(0,12).ToUpper()
+# 2. a throwaway project with the marker buried in it
+mkdir D:\Projects\demo-inventory-sync
+echo "canary-marker: ZCANARY-<yours>" > D:\Projects\demo-inventory-sync\CANARY.txt
+# 3. pass the same marker to the checker — and never open the project in any tool
+agent-audit --canary --canary-dir D:\Projects\demo-inventory-sync --marker ZCANARY-<yours>
+```
+
+Honesty note: Trae's local database is encrypted, so a "clean" for Trae only
+covers its readable storage (the output says so). Compressed stores (Codex
+`.zst`) and UTF-16 text are blind spots of the byte scan.
+
 ## Non-goals (v0.2.x, stated plainly)
 
 - **A tool's own background network traffic at content level**: TLS-encrypted
   on the wire; `--watch` reports WHO it talks to, not WHAT it sends. For
-  content-level proof use the canary method (unique marker strings planted in
-  a throwaway repo, then searched in the tool's local stores and captured
-  traffic).
+  content-level proof use the canary method — built in as `--canary` (see
+  above): unique marker strings planted in a throwaway repo, then searched
+  in the tool's local stores and captured traffic.
 - **Trae chat history**: stored locally in an encrypted database — not
   auditable until the format opens up.
 - **Qoder chat history**: lives server-side; only the local data footprint

@@ -15,7 +15,8 @@
   },
   "scripts": {
     "test": "vitest run",
-    "build": "tsc"
+    "build": "tsc",
+    "prepublishOnly": "node scripts/sync-readme.mjs"
   },
   "files": [
     "dist"
