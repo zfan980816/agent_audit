@@ -57,8 +57,10 @@ agent-audit --watch        # LIVE egress monitor (Windows; see below)
 agent-audit --footprint    # what Qoder indexed locally (see below)
 ```
 
-Python 3.10+ alternative: `uvx agent-audit` (no install) or
-`pipx install agent-audit` (command name: `agentaudit`).
+Python alternative: the original v0.1.1 implementation lives in `src/` as the
+porting reference and is not distributed on PyPI. (Note: the PyPI package
+named `agent-audit` belongs to an unrelated third party — do not install it
+expecting this tool.)
 
 - 100% local parsing. No network calls, no telemetry, ever.
 - Works on Windows, macOS and Linux.

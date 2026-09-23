@@ -39,8 +39,8 @@ agent-audit --watch       # 实时出网监视(Windows;见下文)
 agent-audit --footprint   # Qoder 本地收集了什么(见下文)
 ```
 
-Python 3.10+ 备选:`uvx agent-audit`(免安装)或 `pipx install agent-audit`
-(命令名:`agentaudit`)。
+Python 版说明:v0.1.1 原始实现保留在 `src/` 作为移植参照,**未发布到 PyPI**。
+(注意:PyPI 上名为 `agent-audit` 的包属于无关第三方,安装它并不会得到本工具。)
 
 - 100% 本地解析,永不联网,无遥测
 - Windows / macOS / Linux 全支持(Windows 优先测试)
