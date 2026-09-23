@@ -190,6 +190,15 @@ tbody tr:hover td{background:rgba(255,255,255,.03)}
 <h1>🛡 agent-audit 监控台<span class="badge">· 谁在连哪里</span><span id="tick"></span></h1>
 <div class="sub">AI 工具实时出网 · egress.csv · 3 秒刷新 · 点击进程卡片可筛选</div>
 
+<!-- 北极星横幅:页面第一行直接回答「有没有工具偷扫我的项目」 -->
+<div id="canaryBanner" style="margin-bottom:14px;border-radius:14px;padding:14px 18px;
+  display:flex;align-items:center;gap:12px;font-size:15px;font-weight:600;
+  background:#111721;border:1px solid rgba(255,255,255,.1)">
+  <span style="font-size:22px" id="canaryIcon">🐦</span>
+  <div><div id="canaryText">金丝雀状态加载中…</div>
+  <div style="font-size:11.5px;color:#8a97a8;font-weight:400" id="canaryWhen"></div></div>
+</div>
+
 <div class="alerts" id="alerts"></div>
 
 <div class="card graph-card">
@@ -197,7 +206,6 @@ tbody tr:hover td{background:rgba(255,255,255,.03)}
     <div class="legend">
       <span><i style="background:#3987e5"></i>已知目标</span>
       <span><i style="background:#fab219"></i>未知 [!]</span>
-      <span><i style="background:#5d6b7e"></i>DNS</span>
     </div>
   </div>
   <svg id="graph" preserveAspectRatio="none" viewBox="0 0 1200 130"></svg>
@@ -237,10 +245,10 @@ let curFilter="all", curProc="", curQ="";
 
 async function refresh(){
   try{
-    const rows=(await (await fetch("/api/egress")).json())
-      .filter(x=>x.remote&&x.remote!=="DNS");
-    const dns=(await (await fetch("/api/egress")).json())
-      .filter(x=>x.remote==="DNS").length;
+    // 单次拉取:连接行与 DNS 行同源(修「每 3 秒双倍请求 + 死变量」)
+    const all=await (await fetch("/api/egress")).json();
+    const rows=all.filter(x=>x.remote&&x.remote!=="DNS");
+    const dns=all.filter(x=>x.remote==="DNS").length;
     const known=rows.filter(x=>x.category!=="unknown");
     const unknown=rows.filter(x=>x.category==="unknown");
     const news=rows.filter(x=>x.isNew);
@@ -333,6 +341,36 @@ document.getElementById("q").addEventListener("input",e=>{
   curQ=e.target.value.trim().toLowerCase();if(window.__rows)render(window.__rows);});
 refresh();setInterval(refresh,3000);
 
+/* ---------- 金丝雀横幅(北极星答案,每 30 秒刷新) ---------- */
+async function refreshCanary(){
+  try{
+    const c=await (await fetch("/api/canary")).json();
+    const b=document.getElementById("canaryBanner");
+    const icon=document.getElementById("canaryIcon");
+    const text=document.getElementById("canaryText");
+    const when=document.getElementById("canaryWhen");
+    if(c.status==="CLEAN"){
+      b.style.background="#0f2318";b.style.borderColor="#199e7055";
+      icon.textContent="✅";text.textContent="没有工具偷扫你的项目";
+      text.style.color="#5ad19a";
+      when.textContent="金丝雀检查通过(含检测器自检)"+(c.when?" · "+c.when:"");
+    }else if(c.status==="DIRTY"){
+      b.style.background="#2a1215";b.style.borderColor="#d03b3b55";
+      icon.textContent="🚨";text.textContent="发现工具扫过你的假项目!";
+      text.style.color="#ff8f8f";
+      when.textContent=(c.when?"· "+c.when+" · ":"")+(c.headline||"详情见 canary-result.txt");
+    }else if(c.status==="SELFTEST_FAILED"){
+      b.style.background="#2a1215";b.style.borderColor="#d03b3b55";
+      icon.textContent="⛔";text.textContent="检测器自检失败,「干净」结论不可信";
+      text.style.color="#ff8f8f";when.textContent="排查 canary-check.mjs 后重试";
+    }else{
+      icon.textContent="⏳";text.textContent="金丝雀尚未出结果";
+      when.textContent="等监控循环跑完第一轮,或双击 检查金丝雀.cmd 立即检查";
+    }
+  }catch(e){document.getElementById("canaryText").textContent="金丝雀状态获取失败: "+e.message;}
+}
+refreshCanary();setInterval(refreshCanary,30000);
+
 /* ---------- 行详情:发生了什么 / 凭什么标 / 怎么排查 ---------- */
 const WHY = {
   uploadRisk: "该连接的目标域名命中「数据搬运目的地」特征(粘贴站/网盘/对象存储/webhook)。" +
@@ -389,6 +427,21 @@ createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store" });
     res.end(JSON.stringify(rows));
+    return;
+  }
+  // 金丝雀状态:读 canary-result.txt 的 RESULT 行 + 时间行,给页面北极星横幅
+  if (req.url === "/api/canary") {
+    let status = "UNKNOWN", when = "", headline = "";
+    try {
+      const txt = readFileSync(join(HERE, "canary-result.txt"), "utf8");
+      const m = txt.match(/RESULT:(CLEAN|DIRTY|SELFTEST_FAILED)/);
+      status = m ? m[1] : "PENDING";
+      when = (txt.match(/金丝雀检查 · ([^\n]+)/) || [])[1] || "";
+      headline = (txt.match(/结论:[^\n]+/) || [])[0] || "";
+    } catch { status = "PENDING"; }
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ status, when, headline }));
     return;
   }
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

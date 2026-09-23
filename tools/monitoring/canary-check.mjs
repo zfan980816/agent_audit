@@ -92,12 +92,38 @@ for (const [name, dir] of STORES) {
   }
 }
 
+// 诚实脚注:Trae 主库加密,可读部分无标记 ≠ 没扫过(结构性弱证明)
+const traeEntry = STORES.find(([n]) => n === "Trae");
+if (traeEntry && existsSync(traeEntry[1])) {
+  console.log("  注:Trae 本地主库加密,其「干净」只覆盖可读存储,不构成强证明。");
+}
+
 console.log("");
+// 阳性自检(铃铛必须证明会响):在临时目录埋一个含标记的"伪工具存储",
+// 用与真实扫描完全相同的 walk/scanFile 找它。找不到 = 检测器本身坏了,
+// 本次「干净」结论不可信,exit 3。审计发现:该检测器此前从未验证过阳性。
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+const selfTestDir = mkdtempSync(join(tmpdir(), "canary-selftest-"));
+writeFileSync(join(selfTestDir, "fake-store.zap"),
+  Buffer.from(`padding-padding-${MARKER}-padding`, "latin1"));
+const selfTestFound = [];
+walk(selfTestDir, selfTestFound);
+rmSync(selfTestDir, { recursive: true, force: true });
+const bellWorks = selfTestFound.length > 0;
+if (!bellWorks) {
+  console.log("结论:⛔ 检测器自检失败——扫描器连自己埋的标记都找不到,本次「干净」不可信!");
+  console.log("RESULT:SELFTEST_FAILED");
+  process.exit(3);
+}
+
 if (dirty === 0) {
-  console.log(`结论:✅ 检查了 ${checked} 个工具,没有任何工具动过你的假项目。`);
+  console.log(`结论:✅ 检查了 ${checked} 个工具,没有任何工具动过你的假项目。(自检通过:检测器实证有效)`);
+  console.log("RESULT:CLEAN");
   process.exit(0);
 } else {
   console.log(`结论:🚨 ${dirty} 个工具在未打开该项目的情况下扫取了它 —— 偷偷收集本机项目信息实锤。`);
   console.log(`      排查:上面对应目录里的文件即证据(含标记的位置);可截图留证。`);
+  console.log("RESULT:DIRTY");
   process.exit(1);
 }
