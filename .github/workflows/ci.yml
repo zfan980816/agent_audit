@@ -1,18 +1,16 @@
 name: CI
 on: [push, pull_request]
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.10", "3.12"]
-    runs-on: ${{ matrix.os }}
+  # Python v0.1.1 is FROZEN as the porting reference — one guard run is all it
+  # needs (was 3 OS x 2 Py = 6 runs for unchanged code). The TS line (node
+  # job below) is the canonical implementation.
+  python-frozen:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.12"
       - run: pip install -e ".[dev]"
       - run: pytest -q
 
