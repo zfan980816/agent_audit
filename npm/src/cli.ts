@@ -7,7 +7,7 @@
 // support ONCE at import time — the gate needs to set NO_COLOR before that
 // for piped (non-TTY) runs (ledger M).
 import "./tty-gate.js";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -16,6 +16,13 @@ import { Command, CommanderError, type OptionValues } from "commander";
 import Table from "cli-table3";
 
 import { AGENTS, type AgentFileEntry } from "./agents.js";
+import {
+  DEFAULT_MARKER,
+  canaryCheck,
+  canaryExitCode,
+  defaultCanaryDir,
+  renderCanary,
+} from "./canary.js";
 import { writeDemoSession } from "./demo.js";
 import { DataDirNotFoundError, comparePaths } from "./discovery.js";
 import { runAudit } from "./engine.js";
@@ -37,7 +44,7 @@ import {
 
 // Keep in sync with npm/package.json "version" (importing package.json would
 // need JSON import attributes, which Node 18 does not support).
-export const VERSION = "0.4.0";
+export const VERSION = "0.4.1";
 
 export interface MainIo {
   stdout?: WriteFn;
@@ -45,6 +52,9 @@ export interface MainIo {
   // M5 test seam: partial override of the watch deps (poll/now/sleep/...)
   // so CLI tests never spawn powershell. CLI-only; audit ignores it.
   watchDeps?: Partial<WatchDeps>;
+  // v0.4.1 test seam: replaces the canary store registry so CLI tests run on
+  // tmpdir fixtures instead of walking the real (multi-GB) tool data dirs.
+  canaryStores?: Array<[string, string]>;
 }
 
 // camelCased commander view of the audit flags
@@ -66,6 +76,10 @@ interface AuditFlags {
   csv?: string;
   // M6 footprint mode (TS-only inventory report)
   footprint?: boolean;
+  // v0.4.1 canary mode (TS-only covert-scanning detector)
+  canary?: boolean;
+  canaryDir?: string;
+  marker?: string;
 }
 
 const description =
@@ -129,6 +143,21 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
       "--footprint",
       "Inventory what a tool collected locally (Qoder index stores)",
     )
+    // v0.4.1 canary mode: a marker-carrying throwaway project you NEVER open
+    // in any AI tool; the marker turning up in a tool's data dir is hard
+    // proof it scanned your disk on its own (content-level, unlike --watch).
+    .option(
+      "--canary",
+      "Canary check: did any AI tool secretly scan your local projects?",
+    )
+    .option(
+      "--canary-dir <path>",
+      "Canary: path to the marker project (default ~/canary-project)",
+    )
+    .option(
+      "--marker <s>",
+      `Canary: override the marker string (default ${DEFAULT_MARKER}; use a per-machine one — see README recipe)`,
+    )
     .option("--version", "Show version")
     .action(async (pathArg: string | undefined, opts: OptionValues) => {
       exitCode = await auditCommand(
@@ -137,6 +166,7 @@ export async function main(argv: string[], io: MainIo = {}): Promise<number> {
         stdout,
         stderr,
         io.watchDeps,
+        io.canaryStores,
       );
     });
 
@@ -161,12 +191,18 @@ async function auditCommand(
   stdout: WriteFn,
   stderr: WriteFn,
   watchInject?: Partial<WatchDeps>,
+  canaryStores?: Array<[string, string]>,
 ): Promise<number> {
   if (opts.version) {
     stdout(`agent-audit ${VERSION}\n`);
     return 0;
   }
 
+  // v0.4.1: canary is a mode too, checked first — the monitoring loop runs
+  // it before everything else (fast, independent of watch/audit machinery).
+  if (opts.canary) {
+    return canaryCommand(opts, stdout, stderr, canaryStores);
+  }
   // M5: watch is a mode on this command; audit flags below do not apply.
   if (opts.watch) {
     return watchCommand(opts, stdout, stderr, watchInject);
@@ -176,9 +212,16 @@ async function auditCommand(
   if (opts.footprint) {
     return footprintCommand(opts, pathArg, stdout, stderr);
   }
-  if (opts.proc !== undefined || opts.csv !== undefined) {
-    // common typo guard: --proc/--csv silently doing nothing would confuse
-    stderr("note: --proc/--seconds/--csv apply to --watch mode; ignored\n");
+  if (
+    opts.proc !== undefined ||
+    opts.csv !== undefined ||
+    opts.canaryDir !== undefined ||
+    opts.marker !== undefined
+  ) {
+    // common typo guard: mode flags silently doing nothing would confuse
+    stderr(
+      "note: --proc/--seconds/--csv apply to --watch mode; --canary-dir/--marker apply to --canary mode; ignored\n",
+    );
   }
 
   if (opts.listRules) {
@@ -430,6 +473,44 @@ function footprintCommand(
     stdout(renderFootprint(report));
   }
   return 0;
+}
+
+// v0.4.1 canary mode: scan every known tool's data dir for the canary
+// project's marker (read-only, binary-safe). Exit codes 0/1/2/3 = clean /
+// dirty / no canary dir / detector self-test failed. `canaryStores` is the
+// MainIo test seam — real runs use the built-in registry.
+function canaryCommand(
+  opts: AuditFlags,
+  stdout: WriteFn,
+  stderr: WriteFn,
+  canaryStores?: Array<[string, string]>,
+): number {
+  const canaryDir = opts.canaryDir ?? defaultCanaryDir();
+  if (!existsSync(canaryDir)) {
+    // friendly setup error, not a stack trace: point at the README recipe
+    stderr(
+      `error: canary project not found at ${canaryDir}\n\n` +
+        "Create one (the canary recipe):\n" +
+        "  1. make the dir and drop a couple of innocuous files in it (README.md, package.json)\n" +
+        `  2. hide your marker string inside, e.g.: echo "canary-marker: <marker>" > "${canaryDir}\\CANARY.txt"\n` +
+        "  3. generate a per-machine marker, e.g.:\n" +
+        '       powershell -Command "ZCANARY-" + [guid]::NewGuid().ToString("N").Substring(0,12).ToUpper()\n' +
+        "     pass it via --marker, and NEVER open this project in any AI tool —\n" +
+        "     the marker appearing in a tool's data dir is proof it scanned your disk.\n",
+    );
+    return 2;
+  }
+  const report = canaryCheck({
+    canaryDir,
+    marker: opts.marker ?? DEFAULT_MARKER,
+    stores: canaryStores,
+  });
+  if (opts.json) {
+    stdout(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    stdout(renderCanary(report));
+  }
+  return canaryExitCode(report.status);
 }
 
 // Bin wiring: run only when invoked directly as `node dist/cli.js` (or via the

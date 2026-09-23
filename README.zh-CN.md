@@ -37,6 +37,7 @@ agent-audit --session <id> # 仅审计单个会话
 agent-audit --share       # 输出可分享的摘要卡
 agent-audit --watch       # 实时出网监视(Windows;见下文)
 agent-audit --footprint   # Qoder 本地收集了什么(见下文)
+agent-audit --canary      # 有没有工具偷偷扫你的盘?(见下文)
 ```
 
 Python 版说明:v0.1.1 原始实现保留在 `src/` 作为移植参照,**未发布到 PyPI**。
@@ -91,11 +92,61 @@ agent-audit --footprint --agent qoder    # 显式指定(v0.2.x 仅支持 qoder)
 隐私:报告只**列出**收集了什么(仓库、文件路径、chunk 数、索引时间)——
 绝不读取或输出文件**内容**。其他 `--agent` 一律退出码 2。
 
+## Canary 模式(v0.4.1):有没有工具偷偷扫你的盘?
+
+金丝雀法是 `--watch` 的内容级补位(`--watch` 只能看到「连到谁」——线上
+载荷是 TLS 加密的)。做法:建一个一次性「金丝雀」假项目,里面埋一个唯
+一标记串,并且**永远不在任何 AI 工具里打开它**。标记出现在某个工具的
+本地数据目录里,就是这个工具自己从盘上读了该项目的铁证:偷偷扫盘,人赃并获。
+
+`--canary` 只读扫描所有已知工具的数据目录(Qoder、ZCode、Trae、Kimi
+Code、Codex、Gemini、Cursor,含各自 CLI 目录)找标记。扫描是二进制安全
+的(latin1 按字节匹配——`.zap` 段、sqlite、ldb 页里的标记也看得见,不止
+纯文本),有界(目录深度 8、单文件 256MB),并且**每次运行自带阳性自
+检**:在临时目录埋一个标记,要求检测器必须找到——找不到就报
+`RESULT:SELFTEST_FAILED` 并以退出码 3 结束,绝不输出没有意义的「干净」。
+
+```bash
+agent-audit --canary                                   # 默认目录 ~/canary-project
+agent-audit --canary --canary-dir D:\Projects\demo-inventory-sync
+agent-audit --canary --json                            # 机器可读报告
+```
+
+```
+──── agent-audit canary ────
+canary project: D:\Projects\demo-inventory-sync (you never opened it in any AI tool)
+marker: ZCANARY-7F3A9C21-D4E8
+  ✓ Qoder(active root): clean
+  🚨 Trae: marker found x2 — it scanned your canary project!
+      C:\Users\you\AppData\Roaming\Trae CN\... @byte4815
+  · Kimi-Code: not installed, skipped
+  ...
+RESULT:CLEAN
+```
+
+退出码:`0` 干净 · `1` 发现标记 · `2` 金丝雀项目缺失 · `3` 自检失败。
+
+自建金丝雀(每台机器做一次——默认标记串是部署期常量,请生成自己的):
+
+```powershell
+# 1. 生成一台机器一个的标记
+powershell -Command "ZCANARY-" + [guid]::NewGuid().ToString("N").Substring(0,12).ToUpper()
+# 2. 建一次性假项目,把标记埋进去
+mkdir D:\Projects\demo-inventory-sync
+echo "canary-marker: ZCANARY-<你的标记>" > D:\Projects\demo-inventory-sync\CANARY.txt
+# 3. 把同一标记告诉检查器——并且绝不在任何工具里打开这个项目
+agent-audit --canary --canary-dir D:\Projects\demo-inventory-sync --marker ZCANARY-<你的标记>
+```
+
+诚实脚注:Trae 本地库加密,Trae 的「干净」只覆盖可读存储(输出里有标
+注);压缩存储(Codex `.zst`)与 UTF-16 文本是字节扫描的盲区。
+
 ## 非目标(v0.2.x,明说)
 
 - **工具自身后台网络流量的内容级取证**:线上是 TLS 加密的;`--watch`
-  报告"连到谁",不报告"发了什么"。要内容级证据请用金丝雀法(在一次性
-  仓库里埋唯一标记串,再在工具的本地存储与抓包流量里搜该标记)。
+  报告"连到谁",不报告"发了什么"。要内容级证据请用金丝雀法——已内置为
+  `--canary`(见上文):在一次性仓库里埋唯一标记串,再在工具的本地存储
+  与抓包流量里搜该标记。
 - **Trae 聊天记录**:本地库加密,格式开放前无法审计。
 - **Qoder 聊天记录**:在服务端;本地可见的只有数据足迹(见 `--footprint`)。
 
