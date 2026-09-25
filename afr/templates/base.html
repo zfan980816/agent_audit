@@ -2,34 +2,77 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>{% block title %}Agent Flight Recorder{% endblock %}</title>
+<title>{% block title %}traces · afr{% endblock %}</title>
 <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 <style>
+  /* LangSmith-Traces 风格：浅色、双栏（左执行列表 / 右 span 树） */
   * { box-sizing: border-box; margin: 0; }
-  body { font-family: Consolas, "Courier New", monospace; background: #14161a;
-         color: #cdd3dd; padding: 18px; font-size: 13px; }
-  a { color: #7ab0ff; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  h1 { font-size: 15px; margin-bottom: 12px; color: #e8ecf2; font-weight: 600; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #2a2f37; padding: 5px 9px; text-align: left; }
-  th { background: #1b1f25; color: #9aa4b2; font-weight: 600; }
-  .ok { color: #7fd18a; } .failed { color: #ff7a7a; font-weight: 700; }
-  .warn { color: #e8c268; }
-  pre { background: #0f1114; border: 1px solid #2a2f37; padding: 8px;
-        overflow-x: auto; font-size: 12px; white-space: pre-wrap; }
-  .bar { display: inline-block; border: 1px solid #3a4150; padding: 2px 8px;
-         margin: 2px 6px 2px 0; background: #1b1f25; }
-  .bar.fail { border: 1px dashed #ff7a7a; }
-  .arrow { color: #566072; }
-  details { margin: 4px 0; }
-  summary { cursor: pointer; color: #9aa4b2; }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .muted { color: #727d8c; }
-  .diverge { border: 2px dashed #e8c268; padding: 6px 10px; margin: 6px 0; }
+  body { font-family: "Segoe UI", "PingFang SC", sans-serif; background: #fff;
+         color: #1a1d21; font-size: 13px; height: 100vh; display: flex;
+         flex-direction: column; }
+  header { display: flex; align-items: center; gap: 14px; padding: 8px 16px;
+           border-bottom: 1px solid #e3e6ea; background: #fafbfc; }
+  header h1 { font-size: 14px; font-weight: 600; }
+  header .db { color: #8a94a0; font-size: 12px; }
+  header nav a { color: #47556a; text-decoration: none; padding: 3px 10px;
+                 border-radius: 4px; font-size: 12px; }
+  header nav a.on, header nav a:hover { background: #e8ecf1; color: #111; }
+  main { display: flex; flex: 1; min-height: 0; }
+  #list { width: 420px; min-width: 320px; border-right: 1px solid #e3e6ea;
+          overflow-y: auto; }
+  #detail { flex: 1; overflow-y: auto; padding: 14px 18px; }
+  .row { display: grid; grid-template-columns: 18px 1fr 62px 56px 52px;
+         gap: 6px; padding: 7px 12px; cursor: pointer; align-items: center;
+         border-bottom: 1px solid #f0f2f5; }
+  .row:hover { background: #f6f8fa; }
+  .row.sel { background: #eef4ff; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .ok .dot { background: #22a95c; } .failed .dot { background: #e5484d; }
+  .replaying .dot { background: #f5a623; }
+  .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .sub { color: #8a94a0; font-size: 11px; }
+  .row .num { color: #5b6672; font-size: 12px; text-align: right; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 8px;
+           border-radius: 10px; }
+  .badge.ok { background: #e7f6ed; color: #157347; }
+  .badge.failed { background: #fdecec; color: #c0353a; }
+  .tree-row { border: 1px solid #e8ebef; border-radius: 6px; margin: 8px 0; }
+  .tree-head { display: flex; align-items: center; gap: 10px; padding: 6px 12px;
+               background: #fafbfc; border-bottom: 1px solid #eef0f3; }
+  .tree-head .nm { font-weight: 600; }
+  .tree-head .dur { color: #5b6672; font-size: 12px; margin-left: auto; }
+  .bar { height: 8px; background: #9fc3ff; border-radius: 2px; min-width: 2px; }
+  .bar.err { background: #e5484d; }
+  .child { display: flex; gap: 8px; padding: 5px 12px 5px 28px;
+           border-bottom: 1px solid #f4f6f8; align-items: baseline; }
+  .child:last-child { border-bottom: none; }
+  .tag { font-size: 11px; padding: 0 6px; border-radius: 4px;
+         background: #eef0f3; color: #47556a; }
+  .tag.llm { background: #eef4ff; color: #1d5bd6; }
+  .tag.tool { background: #f3efff; color: #6d3bd6; }
+  pre { background: #f6f8fa; border: 1px solid #e8ebef; border-radius: 4px;
+        padding: 8px; font-size: 12px; font-family: Consolas, monospace;
+        overflow-x: auto; white-space: pre-wrap; margin: 6px 0; }
+  details { margin: 2px 0; }
+  summary { cursor: pointer; color: #47556a; font-size: 12px; }
+  .errbox { background: #fdecec; border: 1px solid #f5c2c4; color: #a03034;
+            border-radius: 6px; padding: 8px 12px; margin: 8px 0;
+            font-family: Consolas, monospace; font-size: 12px;
+            white-space: pre-wrap; }
+  .empty { color: #8a94a0; padding: 40px; text-align: center; }
+  a { color: #1d5bd6; text-decoration: none; }
 </style>
 </head>
 <body>
-{% block body %}{% endblock %}
+<header>
+  <h1>Agent Flight Recorder · traces</h1>
+  <span class="db">{{ db }}</span>
+  <nav>
+    <a href="/" class="{{ 'on' if not status }}">全部</a>
+    <a href="/?status=failed" class="{{ 'on' if status == 'failed' }}">失败</a>
+    <a href="/?status=ok" class="{{ 'on' if status == 'ok' }}">成功</a>
+  </nav>
+</header>
+<main>{% block body %}{% endblock %}</main>
 </body>
 </html>

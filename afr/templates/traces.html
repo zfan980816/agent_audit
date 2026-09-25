@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block body %}
+<div id="list">
+  {% if not runs %}
+  <div class="empty">暂无录制。用 <code>afr.run(graph, inputs)</code> 代替
+    <code>graph.invoke()</code> 开始录制。</div>
+  {% endif %}
+  {% for r in runs %}
+  <div class="row {{ r['status'] }} {{ 'sel' if r['id'] == selected else '' }}"
+       hx-get="/run/{{ r['id'] }}/tree" hx-target="#detail"
+       hx-push-url="/run/{{ r['id'] }}">
+    <span class="dot" title="{{ r['status'] }}"></span>
+    <span class="name">
+      {{ r["label"] or r["id"] }}
+      <span class="sub">{{ "✗" if r["status"] == "failed" else ("…" if r["status"] == "replaying" else "✓") }}#{{ r["id"] }}
+        {%- if r["fork_of"] %} ↩ {{ r["fork_of"] }}{% endif %}</span>
+    </span>
+    <span class="num sub">{{ (r["started_at"][11:19] if r["started_at"] else "-") }}</span>
+    <span class="num">{{ ("%.1fs"|format(r["latency"])) if r["latency"] is not none else "…" }}</span>
+    <span class="num">{{ r["tokens"] or "-" }}</span>
+  </div>
+  {% endfor %}
+</div>
+<div id="detail">
+  {% if tree %}{% with t = tree %}{% include "tree.html" %}{% endwith %}
+  {% else %}
+  <div class="empty">← 点击左侧任意一次执行查看其完整链路<br>
+    <span class="sub">每次执行独立存放；diff：/diff?a=失败ID&b=成功ID</span></div>
+  {% endif %}
+</div>
+{% endblock %}

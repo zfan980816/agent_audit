@@ -36,7 +36,7 @@ def test_run_detail_page(tmp_path):
     client = TestClient(create_app(db))
     r = client.get("/run/fa")
     assert r.status_code == 200 and "researcher" in r.text
-    frag = client.get("/run/fa/io/1")
+    frag = client.get("/run/fa/tree")
     assert frag.status_code == 200 and "sources" in frag.text
 
 

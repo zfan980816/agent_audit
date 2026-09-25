@@ -1,4 +1,9 @@
-"""T2 — `rec` CLI: view (3-page FastAPI+htmx viewer), diff, replay.
+"""T2 — `rec` CLI: LangSmith-style trace viewer, diff, replay.
+
+Viewer layout imitates LangSmith's Traces tab (minus the platform):
+left pane = per-execution list (status dot / label / time / latency /
+tokens), right pane = hierarchical span tree of the selected execution
+(nodes -> nested LLM/tool calls, expandable IO, errors in red).
 
 C1: a corrupt/locked DB surfaces as a clear error + non-zero exit,
 never a raw traceback. The viewer binds localhost only and is started
@@ -8,6 +13,7 @@ on demand — it is NOT part of the capture path (design constraint).
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -21,42 +27,106 @@ from .diff import diff
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+_LIST_SQL = """
+SELECT r.id, r.label, r.status, r.started_at, r.finished_at, r.error, r.fork_of,
+  CASE WHEN r.finished_at IS NULL THEN NULL
+       ELSE CAST((julianday(r.finished_at) - julianday(r.started_at)) * 86400
+                 AS REAL) END AS latency,
+  (SELECT COALESCE(SUM(tokens), 0) FROM llm_calls WHERE run_id = r.id) AS tokens
+FROM runs r
+{where}
+ORDER BY r.started_at DESC, r.id DESC LIMIT 200
+"""
+
+
+def _run_rows(conn, status: str | None = None):
+    where = "WHERE r.status = ?" if status else ""
+    args = (status,) if status else ()
+    return conn.execute(_LIST_SQL.format(where=where), args).fetchall()
+
+
+def _pretty(js: str | None) -> str:
+    if not js:
+        return ""
+    try:
+        obj = json.loads(js)
+        return json.dumps(obj, sort_keys=True, ensure_ascii=False, indent=1)
+    except Exception:
+        return js
+
+
+def _trace_tree(conn, run_id: str):
+    """LangSmith-style span tree: nodes with nested llm/tool children."""
+    meta = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+    if meta is None:
+        return None
+    events = conn.execute(
+        "SELECT seq, ts, kind, node, payload FROM events WHERE run_id=?"
+        " ORDER BY seq", (run_id,)).fetchall()
+    llm_by_node: dict[str, list] = {}
+    for r in conn.execute(
+            "SELECT seq, node, model, kind, request_json, response_json, tokens"
+            " FROM llm_calls WHERE run_id=? ORDER BY seq", (run_id,)):
+        llm_by_node.setdefault(r["node"], []).append({
+            "type": "llm", "name": r["model"], "ok": r["kind"] == "ok",
+            "tokens": r["tokens"],
+            "io": _pretty(r["request_json"]) + "\n→\n" + _pretty(r["response_json"]),
+        })
+    tool_by_node: dict[str, list] = {}
+    for r in conn.execute(
+            "SELECT seq, node, tool_name, kind, args_json, result_json"
+            " FROM tool_calls WHERE run_id=? ORDER BY seq", (run_id,)):
+        tool_by_node.setdefault(r["node"], []).append({
+            "type": "tool", "name": r["tool_name"], "ok": r["kind"] == "ok",
+            "io": _pretty(r["args_json"]) + "\n→\n" + _pretty(r["result_json"]),
+        })
+
+    nodes, cur = [], None
+    for ev in events:
+        if ev["kind"] == "node_start":
+            try:
+                inputs = json.loads(ev["payload"]).get("inputs")
+            except Exception:
+                inputs = ev["payload"]
+            cur = {"node": ev["node"], "ts": ev["ts"], "inputs": inputs,
+                   "children": []}
+            nodes.append(cur)
+        elif ev["kind"] == "node_output" and cur is not None:
+            cur["outputs"] = json.loads(ev["payload"]).get("outputs")
+    for i, n in enumerate(nodes):
+        nxt = nodes[i + 1]["ts"] if i + 1 < len(nodes) else None
+        last = events[-1]["ts"] if events else n["ts"]
+        n["dur"] = ((nxt if nxt is not None else last) - n["ts"]) or 0.0
+        n["children"] = llm_by_node.get(n["node"], []) + \
+            tool_by_node.get(n["node"], [])
+    total = (events[-1]["ts"] - events[0]["ts"]) if len(events) > 1 else 0.0
+    return {"meta": meta, "nodes": nodes, "total": total}
+
 
 def create_app(db_path) -> FastAPI:
     app = FastAPI(title="Agent Flight Recorder", docs_url=None, redoc_url=None)
     conn = connect(db_path)
 
     @app.get("/", response_class=HTMLResponse)
-    def runs_page(request: Request):
-        rows = conn.execute(
-            "SELECT id, label, status, started_at, finished_at, error, fork_of"
-            " FROM runs ORDER BY started_at DESC, id DESC LIMIT 200").fetchall()
-        return _TEMPLATES.TemplateResponse(request, "runs.html",
-                                           {"runs": rows, "db": str(db_path)})
+    def traces_page(request: Request, status: str | None = None):
+        rows = _run_rows(conn, status)
+        return _TEMPLATES.TemplateResponse(request, "traces.html", {
+            "runs": rows, "db": str(db_path), "status": status or "",
+        })
+
+    @app.get("/run/{run_id}/tree", response_class=HTMLResponse)
+    def tree_partial(request: Request, run_id: str):
+        t = _trace_tree(conn, run_id)
+        return _TEMPLATES.TemplateResponse(request, "tree.html", {"t": t})
 
     @app.get("/run/{run_id}", response_class=HTMLResponse)
     def run_page(request: Request, run_id: str):
-        meta = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
-        events = conn.execute(
-            "SELECT seq, ts, kind, node, payload FROM events WHERE run_id=?"
-            " ORDER BY seq", (run_id,)).fetchall()
-        llm = conn.execute(
-            "SELECT seq, node, model, kind, tokens FROM llm_calls WHERE run_id=?"
-            " ORDER BY seq", (run_id,)).fetchall()
-        tools = conn.execute(
-            "SELECT seq, node, tool_name, kind FROM tool_calls WHERE run_id=?"
-            " ORDER BY seq", (run_id,)).fetchall()
-        return _TEMPLATES.TemplateResponse(request, "detail.html", {
-            "meta": meta, "events": events, "llm": llm, "tools": tools,
+        t = _trace_tree(conn, run_id)
+        rows = _run_rows(conn)
+        return _TEMPLATES.TemplateResponse(request, "traces.html", {
+            "runs": rows, "db": str(db_path), "status": "",
+            "selected": run_id, "tree": t,
         })
-
-    @app.get("/run/{run_id}/io/{seq}", response_class=HTMLResponse)
-    def io_fragment(request: Request, run_id: str, seq: int):
-        ev = conn.execute(
-            "SELECT payload FROM events WHERE run_id=? AND seq=?",
-            (run_id, seq)).fetchone()
-        return _TEMPLATES.TemplateResponse(request, "io.html",
-                                           {"ev": ev, "seq": seq})
 
     @app.get("/diff", response_class=HTMLResponse)
     def diff_page(request: Request, a: str, b: str):
