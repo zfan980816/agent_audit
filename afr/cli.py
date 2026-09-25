@@ -55,6 +55,70 @@ def _pretty(js: str | None) -> str:
         return js
 
 
+_ROLE = {"human": "用户", "ai": "AI", "system": "系统", "tool": "工具结果"}
+
+
+def _msg_cards(request_json: str | None):
+    """LangSmith-style message cards from the captured request messages."""
+    cards = []
+    if not request_json:
+        return cards
+    try:
+        msgs = json.loads(request_json)
+    except Exception:
+        return cards
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content") or ""
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        cards.append({"role": _ROLE.get(m.get("type"), m.get("type", "?")),
+                      "content": content, "tool": None, "err": False})
+    return cards
+
+
+def _resp_card(response_json: str | None):
+    """The model's answer as one card (with tool-call args if present)."""
+    if not response_json:
+        return None
+    try:
+        m = json.loads(response_json)
+    except Exception:
+        return None
+    if not isinstance(m, dict):
+        return {"role": "AI", "content": str(m), "tool": None, "err": False}
+    if "error" in m and set(m) <= {"error"}:
+        return {"role": "错误", "content": m["error"], "tool": None, "err": True}
+    tool = None
+    calls = (m.get("additional_kwargs") or {}).get("tool_calls") or []
+    if calls:
+        fn = calls[-1].get("function", {})
+        tool = {"name": fn.get("name"), "args": fn.get("arguments", "")}
+    content = m.get("content") or ""
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False)
+    return {"role": "AI", "content": content, "tool": tool, "err": False}
+
+
+def _tool_cards(args_json: str | None, result_json: str | None, name: str):
+    args = None
+    if args_json:
+        try:
+            args = json.loads(args_json)
+        except Exception:
+            args = args_json
+    result = result_json
+    if result_json:
+        try:
+            r = json.loads(result_json)
+            result = r if isinstance(r, str) else json.dumps(
+                r, ensure_ascii=False, indent=1)
+        except Exception:
+            pass
+    return {"args": args, "result": result, "name": name}
+
+
 def _trace_tree(conn, run_id: str):
     """LangSmith-style span tree: nodes with nested llm/tool children."""
     meta = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
@@ -69,8 +133,11 @@ def _trace_tree(conn, run_id: str):
             " FROM llm_calls WHERE run_id=? ORDER BY seq", (run_id,)):
         llm_by_node.setdefault(r["node"], []).append({
             "type": "llm", "name": r["model"], "ok": r["kind"] == "ok",
-            "tokens": r["tokens"],
-            "io": _pretty(r["request_json"]) + "\n→\n" + _pretty(r["response_json"]),
+            "tokens": r["tokens"] or 0,
+            "cards": _msg_cards(r["request_json"]),
+            "resp": _resp_card(r["response_json"]),
+            "raw": _pretty(r["request_json"]) + "\n→\n"
+                + _pretty(r["response_json"]),
         })
     tool_by_node: dict[str, list] = {}
     for r in conn.execute(
@@ -78,7 +145,8 @@ def _trace_tree(conn, run_id: str):
             " FROM tool_calls WHERE run_id=? ORDER BY seq", (run_id,)):
         tool_by_node.setdefault(r["node"], []).append({
             "type": "tool", "name": r["tool_name"], "ok": r["kind"] == "ok",
-            "io": _pretty(r["args_json"]) + "\n→\n" + _pretty(r["result_json"]),
+            "tokens": 0,
+            "tc": _tool_cards(r["args_json"], r["result_json"], r["tool_name"]),
         })
 
     nodes, cur = [], None
@@ -99,8 +167,12 @@ def _trace_tree(conn, run_id: str):
         n["dur"] = ((nxt if nxt is not None else last) - n["ts"]) or 0.0
         n["children"] = llm_by_node.get(n["node"], []) + \
             tool_by_node.get(n["node"], [])
+        n["tokens"] = sum(c.get("tokens") or 0 for c in n["children"])
+        n["slow"] = n["dur"] > 10.0
     total = (events[-1]["ts"] - events[0]["ts"]) if len(events) > 1 else 0.0
-    return {"meta": meta, "nodes": nodes, "total": total}
+    tokens = sum(n["tokens"] for n in nodes)
+    return {"meta": meta, "nodes": nodes, "total": total, "tokens": tokens,
+            "slow": total > 30.0}
 
 
 def create_app(db_path) -> FastAPI:
