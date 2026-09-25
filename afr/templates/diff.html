@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}diff {{ d.run_a }}↔{{ d.run_b }} · afr{% endblock %}
+{% block body %}
+<h1>run diff <span class="failed">#{{ d.run_a }} {{ d.status_a }}</span>
+  ↔ <span class="ok">#{{ d.run_b }} {{ d.status_b }}</span></h1>
+
+{% if not d.aligned %}
+<div class="diverge">不可对齐 —— {{ d.reason }}</div>
+{% else %}
+<p>
+  {% for row in d.rows %}
+    <span class="bar {{ 'fail' if not row['same'] else '' }}">
+      {% if row["same"] %}◇ {{ row["node"] }} 一致
+      {% elif row["index"] == d.first_divergence %}▶ {{ row["node"] }} <b>首个分歧</b>
+      {% else %}≠ {{ row["node"] }}{% endif %}
+    </span>
+  {% endfor %}
+</p>
+{% for row in d.rows %}
+  {% if not row["same"] %}
+  <h1>{{ row["node"] }}{% if row["index"] == d.first_divergence %} · 首个分歧{% endif %}</h1>
+  <div class="grid2">
+    <div><div class="muted">#{{ d.run_a }} ({{ d.status_a }})</div>
+      <pre>{{ row["a"] }}</pre></div>
+    <div><div class="muted">#{{ d.run_b }} ({{ d.status_b }})</div>
+      <pre>{{ row["b"] }}</pre></div>
+  </div>
+  {% endif %}
+{% else %}
+<p class="ok">两次 run 的全部节点输出一致。</p>
+{% endfor %}
+{% endif %}
+<p><a href="/">← 返回列表</a></p>
+{% endblock %}

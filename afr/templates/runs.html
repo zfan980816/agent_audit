@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}runs · afr{% endblock %}
+{% block body %}
+<h1>agent-flight-recorder · runs <span class="muted">({{ db }})</span></h1>
+{% if not runs %}
+<p class="muted">暂无录制。用 <pre style="display:inline">afr.run(graph, inputs)</pre> 代替
+<code>graph.invoke()</code> 开始录制。</p>
+{% else %}
+<table>
+  <tr><th>run</th><th>label</th><th>状态</th><th>开始时间</th><th>结束时间</th><th>错误</th><th></th></tr>
+  {% for r in runs %}
+  <tr>
+    <td>#{{ r["id"] }}</td>
+    <td>{{ r["label"] or "-" }}</td>
+    <td class="{{ 'ok' if r['status'] == 'ok' else 'failed' }}">
+      {{ "✓ " + r["status"] if r["status"] == "ok" else "✗ " + r["status"] }}</td>
+    <td>{{ r["started_at"] or "-" }}</td>
+    <td>{{ r["finished_at"] or "-" }}</td>
+    <td class="muted">{{ (r["error"] or "")[:80] }}</td>
+    <td>
+      <a href="/run/{{ r['id'] }}">[详情]</a>
+      {% if r["status"] == "failed" %}<a href="#" title="选一个成功的 run 配对">[diff↔]</a>{% endif %}
+      {% if r["fork_of"] %}<span class="muted">(fork of {{ r["fork_of"] }})</span>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">diff：把两个 run id 放进 URL —— /diff?a=失败ID&b=成功ID</p>
+{% endif %}
+{% endblock %}
