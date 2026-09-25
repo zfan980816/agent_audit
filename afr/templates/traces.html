@@ -1,17 +1,11 @@
 {% extends "base.html" %}
 {% block body %}
-{% if banner_fails %}
-<div style="position:absolute;top:40px;left:0;right:0;background:#fdecec;color:#a03034;
-     border-bottom:1px solid #f5c2c4;padding:6px 16px;font-size:12px;z-index:5">
-  ⚠ 最近 50 次执行中有 <b>{{ banner_fails }}</b> 次失败
-  <a href="/?status=failed" style="color:#a03034;text-decoration:underline">查看失败列表</a>
-  · <a href="/stats" style="color:#a03034;text-decoration:underline">监控概览</a>
-</div>
-{% endif %}
 <div id="list">
   {% if not runs %}
   <div class="empty">暂无录制。用 <code>afr.run(graph, inputs)</code> 代替
     <code>graph.invoke()</code> 开始录制。</div>
+  {% else %}
+  <div class="list-head"><span></span><span>名称</span><span style="text-align:right">时间</span><span style="text-align:right">延迟</span><span style="text-align:right">token</span></div>
   {% endif %}
   {% for r in runs %}
   <div class="row {{ r['status'] }} {{ 'sel' if r['id'] == selected else '' }}"
@@ -24,7 +18,7 @@
         {%- if r["fork_of"] %} ↩ {{ r["fork_of"] }}{% endif %}</span>
     </span>
     <span class="num sub">{{ (r["started_at"][11:19] if r["started_at"] else "-") }}</span>
-    <span class="num">{{ ("%.1fs"|format(r["latency"])) if r["latency"] is not none else "…" }}</span>
+    <span class="num">{% if r["latency"] is none %}…{% elif r["latency"] < 1 %}{{ "%.0fms"|format(r["latency"] * 1000) }}{% else %}{{ "%.1fs"|format(r["latency"]) }}{% endif %}</span>
     <span class="num">{{ r["tokens"] or "-" }}</span>
   </div>
   {% endfor %}
@@ -33,7 +27,7 @@
   {% if tree %}{% with t = tree %}{% include "tree.html" %}{% endwith %}
   {% else %}
   <div class="empty">← 点击左侧任意一次执行查看其完整链路<br>
-    <span class="sub">每次执行独立存放；diff：/diff?a=失败ID&b=成功ID</span></div>
+    <span class="sub" style="color:var(--n-400);font-size:12px">每次执行独立存放；diff：/diff?a=失败ID&b=成功ID</span></div>
   {% endif %}
 </div>
 {% endblock %}

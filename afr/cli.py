@@ -120,59 +120,90 @@ def _tool_cards(args_json: str | None, result_json: str | None, name: str):
 
 
 def _trace_tree(conn, run_id: str):
-    """LangSmith-style span tree: nodes with nested llm/tool children."""
+    """LangSmith-style span tree: nodes with nested llm/tool children.
+
+    Children attach to node OCCURRENCES by merged seq order (node_start
+    events, llm_calls and tool_calls share one seq counter), so ReAct
+    loops (agent→tools→agent) never duplicate calls across visits.
+    """
     meta = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
     if meta is None:
         return None
     events = conn.execute(
         "SELECT seq, ts, kind, node, payload FROM events WHERE run_id=?"
         " ORDER BY seq", (run_id,)).fetchall()
-    llm_by_node: dict[str, list] = {}
-    for r in conn.execute(
-            "SELECT seq, node, model, kind, request_json, response_json, tokens"
-            " FROM llm_calls WHERE run_id=? ORDER BY seq", (run_id,)):
-        llm_by_node.setdefault(r["node"], []).append({
-            "type": "llm", "name": r["model"], "ok": r["kind"] == "ok",
-            "tokens": r["tokens"] or 0,
-            "cards": _msg_cards(r["request_json"]),
-            "resp": _resp_card(r["response_json"]),
-            "raw": _pretty(r["request_json"]) + "\n→\n"
-                + _pretty(r["response_json"]),
-        })
-    tool_by_node: dict[str, list] = {}
-    for r in conn.execute(
-            "SELECT seq, node, tool_name, kind, args_json, result_json"
-            " FROM tool_calls WHERE run_id=? ORDER BY seq", (run_id,)):
-        tool_by_node.setdefault(r["node"], []).append({
-            "type": "tool", "name": r["tool_name"], "ok": r["kind"] == "ok",
-            "tokens": 0,
-            "tc": _tool_cards(r["args_json"], r["result_json"], r["tool_name"]),
-        })
 
-    nodes, cur = [], None
+    stream = []
     for ev in events:
         if ev["kind"] == "node_start":
             try:
                 inputs = json.loads(ev["payload"]).get("inputs")
             except Exception:
                 inputs = ev["payload"]
-            cur = {"node": ev["node"], "ts": ev["ts"], "inputs": inputs,
-                   "children": []}
+            stream.append((ev["seq"], 0, {"node": ev["node"], "ts": ev["ts"],
+                                           "inputs": inputs, "children": [],
+                                           "outputs": None}))
+        elif ev["kind"] == "node_output":
+            try:
+                out = json.loads(ev["payload"]).get("outputs")
+            except Exception:
+                out = ev["payload"]
+            stream.append((ev["seq"], 2, {"node_output": out}))
+    for r in conn.execute(
+            "SELECT seq, node, model, kind, request_json, response_json,"
+            " tokens, dur FROM llm_calls WHERE run_id=?", (run_id,)):
+        stream.append((r["seq"], 1, {
+            "type": "llm", "name": r["model"], "ok": r["kind"] == "ok",
+            "tokens": r["tokens"], "dur": r["dur"],
+            "cards": _msg_cards(r["request_json"]),
+            "resp": _resp_card(r["response_json"]),
+            "raw": _pretty(r["request_json"]) + "\n→\n"
+                + _pretty(r["response_json"])}))
+    for r in conn.execute(
+            "SELECT seq, node, tool_name, kind, args_json, result_json"
+            " FROM tool_calls WHERE run_id=?", (run_id,)):
+        stream.append((r["seq"], 1, {
+            "type": "tool", "name": r["tool_name"], "ok": r["kind"] == "ok",
+            "tokens": None, "dur": None,
+            "tc": _tool_cards(r["args_json"], r["result_json"],
+                              r["tool_name"])}))
+    stream.sort(key=lambda x: (x[0], x[1]))
+
+    nodes, cur = [], None
+    for _, kind, item in stream:
+        if "node" in item and "ts" in item:
+            cur = item
             nodes.append(cur)
-        elif ev["kind"] == "node_output" and cur is not None:
-            cur["outputs"] = json.loads(ev["payload"]).get("outputs")
+        elif "node_output" in item:
+            if cur is not None and cur.get("outputs") is None:
+                cur["outputs"] = item["node_output"]
+        elif cur is not None:
+            if item.get("tokens") == 0:
+                item["tokens"] = None  # 0 = unknown, display as —
+            cur["children"].append(item)
+
     for i, n in enumerate(nodes):
         nxt = nodes[i + 1]["ts"] if i + 1 < len(nodes) else None
         last = events[-1]["ts"] if events else n["ts"]
-        n["dur"] = ((nxt if nxt is not None else last) - n["ts"]) or 0.0
-        n["children"] = llm_by_node.get(n["node"], []) + \
-            tool_by_node.get(n["node"], [])
+        # clamp >= 0: non-monotonic capture (e.g. replayed interleavings)
+        # must never surface a negative duration to the user
+        n["dur"] = max(0.0, ((nxt if nxt is not None else last) - n["ts"]))
         n["tokens"] = sum(c.get("tokens") or 0 for c in n["children"])
         n["slow"] = n["dur"] > 10.0
-    total = (events[-1]["ts"] - events[0]["ts"]) if len(events) > 1 else 0.0
+    span = max(0.0, events[-1]["ts"] - events[0]["ts"]) if len(events) > 1 else 0.0
+    # wall latency from the runs table — same source as the list column,
+    # so the two numbers can never disagree
+    wall = None
+    if meta["finished_at"] and meta["started_at"]:
+        r = conn.execute(
+            "SELECT CAST((julianday(finished_at)-julianday(started_at))"
+            "*86400 AS REAL) l FROM runs WHERE id=?", (run_id,)).fetchone()
+        wall = r["l"] if r else None
+    total = wall if wall is not None else span
     tokens = sum(n["tokens"] for n in nodes)
+    started = (meta["started_at"] or "").replace("T", " ")
     return {"meta": meta, "nodes": nodes, "total": total, "tokens": tokens,
-            "slow": total > 30.0}
+            "span": span, "slow": total > 30.0, "started": started}
 
 
 _DEFAULT_PRICES = {  # CNY / 1K tokens，混合粗估；~/.afr/prices.json 可覆盖

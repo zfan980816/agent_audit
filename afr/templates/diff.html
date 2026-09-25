@@ -1,34 +1,53 @@
 {% extends "base.html" %}
 {% block title %}diff {{ d.run_a }}↔{{ d.run_b }} · afr{% endblock %}
 {% block body %}
-<h1>run diff <span class="failed">#{{ d.run_a }} {{ d.status_a }}</span>
-  ↔ <span class="ok">#{{ d.run_b }} {{ d.status_b }}</span></h1>
+<div style="width:100%;padding:0;overflow-y:auto" id="detail">
+<div style="max-width:960px">
+<h2 style="font-size:15px;font-weight:600;margin:2px 0 12px">
+  run diff
+  <span class="badge failed">#{{ d.run_a }} {{ d.status_a }}</span>
+  ↔
+  <span class="badge ok">#{{ d.run_b }} {{ d.status_b }}</span>
+</h2>
 
 {% if not d.aligned %}
-<div class="diverge">不可对齐 —— {{ d.reason }}</div>
+<div class="errbox">不可对齐 —— {{ d.reason }}</div>
 {% else %}
-<p>
+<div style="margin:10px 0">
   {% for row in d.rows %}
-    <span class="bar {{ 'fail' if not row['same'] else '' }}">
+    <span class="{{ 'tag node' if row['same'] else 'badge failed' }}"
+          style="margin-right:6px;display:inline-flex;margin-bottom:4px;
+                 {{ 'outline:2px solid var(--brand-500);' if row['index'] == d.first_divergence }}">
       {% if row["same"] %}◇ {{ row["node"] }} 一致
-      {% elif row["index"] == d.first_divergence %}▶ {{ row["node"] }} <b>首个分歧</b>
+      {% elif row["index"] == d.first_divergence %}▶ {{ row["node"] }} 首个分歧
       {% else %}≠ {{ row["node"] }}{% endif %}
     </span>
   {% endfor %}
-</p>
+</div>
 {% for row in d.rows %}
   {% if not row["same"] %}
-  <h1>{{ row["node"] }}{% if row["index"] == d.first_divergence %} · 首个分歧{% endif %}</h1>
-  <div class="grid2">
-    <div><div class="muted">#{{ d.run_a }} ({{ d.status_a }})</div>
-      <pre>{{ row["a"] }}</pre></div>
-    <div><div class="muted">#{{ d.run_b }} ({{ d.status_b }})</div>
-      <pre>{{ row["b"] }}</pre></div>
+  <div class="tree-row">
+    <div class="tree-head">
+      <span class="nm">{{ row["node"] }}{% if row["index"] == d.first_divergence %} · 首个分歧{% endif %}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
+      <div style="padding:10px 12px;border-right:1px solid var(--n-100)">
+        <div class="mc-head">#{{ d.run_a }}（{{ d.status_a }}）</div>
+        <pre>{{ row["a"] }}</pre>
+      </div>
+      <div style="padding:10px 12px">
+        <div class="mc-head">#{{ d.run_b }}（{{ d.status_b }}）</div>
+        <pre>{{ row["b"] }}</pre>
+      </div>
+    </div>
   </div>
   {% endif %}
 {% else %}
-<p class="ok">两次 run 的全部节点输出一致。</p>
+<div class="stat-card" style="border-left:3px solid var(--green-500)">
+  两次 run 的全部节点输出一致。</div>
 {% endfor %}
 {% endif %}
-<p><a href="/">← 返回列表</a></p>
+<p style="margin-top:12px"><a href="/">← 返回列表</a></p>
+</div>
+</div>
 {% endblock %}

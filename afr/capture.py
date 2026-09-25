@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS events(
 CREATE TABLE IF NOT EXISTS llm_calls(
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, seq INTEGER, node TEXT,
   model TEXT, key_hash TEXT, request_json TEXT, response_json TEXT,
-  kind TEXT, tokens INTEGER);
+  kind TEXT, tokens INTEGER, dur REAL);
 CREATE TABLE IF NOT EXISTS tool_calls(
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, seq INTEGER, node TEXT,
   tool_name TEXT, args_hash TEXT, args_json TEXT, result_json TEXT, kind TEXT);
@@ -59,6 +59,10 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
     with _SCHEMA_LOCK:
         conn.executescript(SCHEMA)
+        try:  # migration for DBs created before llm_calls.dur existed
+            conn.execute("ALTER TABLE llm_calls ADD COLUMN dur REAL")
+        except sqlite3.OperationalError:
+            pass
     return conn
 
 
@@ -150,6 +154,7 @@ class Recorder(BaseCallbackHandler):
             self._pending_llm[str(run_id)] = {
                 "model": model,
                 "node": self._node(metadata),
+                "t0": time.time(),
                 "request_json": canonical_json([m.model_dump() for m in batch]),
             }
 
@@ -173,10 +178,11 @@ class Recorder(BaseCallbackHandler):
             key = llm_key(self.run_id, pend["model"], pend["request_json"], params)
             self.conn.execute(
                 "INSERT INTO llm_calls(run_id, seq, node, model, key_hash,"
-                " request_json, response_json, kind, tokens)"
-                " VALUES(?,?,?,?,?,?,?,?,?)",
+                " request_json, response_json, kind, tokens, dur)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (self.run_id, self._next_seq(), pend["node"], pend["model"], key,
-                 pend["request_json"], canonical_json(msg.model_dump()), "ok", tokens),
+                 pend["request_json"], canonical_json(msg.model_dump()), "ok",
+                 tokens, max(0.0, time.time() - pend.get("t0", time.time()))),
             )
             self.conn.commit()
             self._event("llm", pend["node"], {"model": pend["model"], "kind": "ok"})

@@ -2,25 +2,26 @@
 {% if not t %}
 <div class="empty">run 不存在</div>
 {% else %}
-<h2 style="font-size:15px;margin-bottom:6px">
-  #{{ t.meta["id"] }} {{ t.meta["label"] }}
+<div class="detail-title">
+  <span class="t">{{ t.meta["label"] or "#" ~ t.meta["id"] }}</span>
   <span class="badge {{ t.meta["status"] }}">{{ t.meta["status"] }}</span>
-  <span class="sub" style="color:#8a94a0;font-size:12px">
-    {{ t.meta["started_at"] }} · 总时长
-    <span class="{{ 'slow-red' if t.slow }}">{{ "%.1f"|format(t.total) if t.total else "0" }}s</span>
-    · {{ t.tokens }} tokens
-    {% if t.meta["fork_of"] %}· fork of {{ t.meta["fork_of"] }}{% endif %}
-  </span>
-</h2>
+</div>
+<div class="meta-chips">
+  <span class="chip">#{{ t.meta["id"] }}{% if t.meta["fork_of"] %} · fork of {{ t.meta["fork_of"] }}{% endif %}</span>
+  <span class="chip">开始 <b>{{ t.started or "-" }}</b></span>
+  <span class="chip"{% if t.slow %} title="超过 30s 阈值"{% endif %}>总时长 <b class="{{ 'slow-red' if t.slow }}">{{ "%.1f"|format(t.total) if t.total is not none else "-" }}s</b></span>
+  <span class="chip">token <b>{{ "{:,}".format(t.tokens) if t.tokens else "—" }}</b></span>
+  <span class="chip">节点 <b>{{ t.nodes|length }}</b></span>
+</div>
 {% if t.meta["error"] %}<div class="errbox">{{ t.meta["error"] }}</div>{% endif %}
 
 {% for n in t.nodes %}
 <div class="tree-row">
   <div class="tree-head">
-    <span class="nm">{{ n.node }}</span>
-    <span class="bar" style="width: {{ ((n.dur / t.total * 160) if t.total else 8)|int + 4 }}px"></span>
-    <span class="dur {{ 'slow-red' if n.slow }}">{{ "%.2f"|format(n.dur) if n.dur is not none else "-" }}s</span>
-    {% if n.tokens %}<span class="tokchip">{{ n.tokens }} tok</span>{% endif %}
+    <span class="tag node">NODE</span><span class="nm">{{ n.node }}</span>
+    <span class="wf" title="{{ "%.2f"|format(n.dur) }}s"><span class="bar {{ 'err' if n.slow }}" style="{% if n.dur %}width: {{ ((n.dur / t.total * 100) if t.total else 0)|round(1) }}%{% else %}width:0;min-width:0{% endif %}"></span></span>
+    <span class="dur {{ 'slow-red' if n.slow }}"{% if n.slow %} title="超过 10s"{% endif %}>{% if n.dur is none %}—{% elif n.dur < 1 %}{{ "%.0fms"|format(n.dur * 1000) }}{% else %}{{ "%.1fs"|format(n.dur) }}{% endif %}</span>
+    {% if n.tokens %}<span class="tokchip">{{ "{:,}".format(n.tokens) }} tok</span>{% endif %}
   </div>
   <details style="padding:4px 12px">
     <summary>节点入口状态（= 上一节点输出）</summary>
@@ -32,7 +33,8 @@
     <summary>
       <span class="tag llm">LLM</span> {{ c.name }}
       {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
-      {% if c.tokens %}<span class="tokchip">{{ c.tokens }} tok</span>{% endif %}
+      {% if c.dur is not none %}<span style="color:var(--n-500);font-size:11.5px;font-variant-numeric:tabular-nums">{% if c.dur < 1 %}{{ "%.0fms"|format(c.dur * 1000) }}{% else %}{{ "%.1fs"|format(c.dur) }}{% endif %}</span>{% endif %}
+      {% if c.tokens %}<span class="tokchip">{{ "{:,}".format(c.tokens) }} tok</span>{% endif %}
     </summary>
     <div class="cards">
       {% for m in c.cards %}
