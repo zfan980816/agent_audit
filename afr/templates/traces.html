@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 {% block body %}
+{% if banner_fails %}
+<div style="position:absolute;top:40px;left:0;right:0;background:#fdecec;color:#a03034;
+     border-bottom:1px solid #f5c2c4;padding:6px 16px;font-size:12px;z-index:5">
+  ⚠ 最近 50 次执行中有 <b>{{ banner_fails }}</b> 次失败
+  <a href="/?status=failed" style="color:#a03034;text-decoration:underline">查看失败列表</a>
+  · <a href="/stats" style="color:#a03034;text-decoration:underline">监控概览</a>
+</div>
+{% endif %}
 <div id="list">
   {% if not runs %}
   <div class="empty">暂无录制。用 <code>afr.run(graph, inputs)</code> 代替

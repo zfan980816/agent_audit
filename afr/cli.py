@@ -175,6 +175,93 @@ def _trace_tree(conn, run_id: str):
             "slow": total > 30.0}
 
 
+_DEFAULT_PRICES = {  # CNY / 1K tokens，混合粗估；~/.afr/prices.json 可覆盖
+    "gpt-4o": 0.12, "gpt-4o-mini": 0.01, "gpt-4.1": 0.12,
+    "qwen-max": 0.12, "qwen-plus": 0.02, "qwen-turbo": 0.005,
+    "deepseek-chat": 0.008, "claude-*": 0.18,
+}
+
+
+def _prices():
+    prices = dict(_DEFAULT_PRICES)
+    try:
+        p = Path.home() / ".afr" / "prices.json"
+        if p.exists():
+            prices.update(json.loads(p.read_text(encoding="utf-8")))
+    except Exception:
+        pass
+    return prices
+
+
+def _price_for(model: str, prices: dict) -> float:
+    if model in prices:
+        return prices[model]
+    m = (model or "").lower()
+    for k, v in prices.items():
+        if k.endswith("*") and m.startswith(k[:-1].lower()):
+            return v
+    return 0.0
+
+
+def _stats(conn):
+    """Monitoring overview (D17 A+C): per-flow health + cost estimate."""
+    prices = _prices()
+    runs = conn.execute("""
+      SELECT r.id, r.label, r.status, r.started_at, r.error,
+        CASE WHEN r.finished_at IS NULL THEN NULL
+             ELSE CAST((julianday(r.finished_at) - julianday(r.started_at))
+                       * 86400 AS REAL) END AS latency
+      FROM runs r ORDER BY r.started_at DESC, r.id DESC LIMIT 1000""").fetchall()
+    tok_rows = conn.execute(
+        "SELECT run_id, model, SUM(tokens) t FROM llm_calls"
+        " WHERE tokens IS NOT NULL GROUP BY run_id, model").fetchall()
+    tok_by_run: dict[str, dict[str, int]] = {}
+    for r in tok_rows:
+        tok_by_run.setdefault(r["run_id"], {})[r["model"]] = r["t"]
+
+    flows: dict[str, dict] = {}
+    models: dict[str, dict] = {}
+    total_n = total_fail = total_tokens = 0
+    for r in runs:
+        label = r["label"] or "(未命名)"
+        f = flows.setdefault(label, {"label": label, "n": 0, "fails": 0,
+                                     "lat": [], "tokens": 0, "cost": 0.0,
+                                     "last": r["started_at"]})
+        f["n"] += 1
+        total_n += 1
+        if r["status"] == "failed":
+            f["fails"] += 1
+            total_fail += 1
+        if r["latency"] is not None:
+            f["lat"].append(r["latency"])
+        for model, tok in tok_by_run.get(r["id"], {}).items():
+            cost = (tok / 1000.0) * _price_for(model, prices)
+            f["tokens"] += tok
+            f["cost"] += cost
+            total_tokens += tok
+            mm = models.setdefault(model, {"model": model, "tokens": 0,
+                                           "cost": 0.0})
+            mm["tokens"] += tok
+            mm["cost"] += cost
+
+    for f in flows.values():
+        lat = sorted(f.pop("lat"))
+        f["avg"] = (sum(lat) / len(lat)) if lat else None
+        f["p95"] = lat[min(int(0.95 * (len(lat) - 1)), len(lat) - 1)] if lat else None
+        f["rate"] = (1 - f["fails"] / f["n"]) if f["n"] else 1.0
+    recent_failures = [r for r in runs if r["status"] == "failed"][:8]
+    banner_fails = sum(1 for r in runs[:50] if r["status"] == "failed")
+    return {
+        "flows": sorted(flows.values(), key=lambda x: -x["n"]),
+        "models": sorted(models.values(), key=lambda x: -x["tokens"]),
+        "total": {"n": total_n, "fails": total_fail, "tokens": total_tokens,
+                  "cost": sum(m["cost"] for m in models.values())},
+        "recent_failures": recent_failures,
+        "banner_fails": banner_fails,
+        "price_note": "单价可在 ~/.afr/prices.json 覆盖（CNY/1K tokens）",
+    }
+
+
 def create_app(db_path) -> FastAPI:
     app = FastAPI(title="Agent Flight Recorder", docs_url=None, redoc_url=None)
     conn = connect(db_path)
@@ -182,8 +269,19 @@ def create_app(db_path) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def traces_page(request: Request, status: str | None = None):
         rows = _run_rows(conn, status)
+        banner = conn.execute(
+            "SELECT COUNT(*) c FROM (SELECT status FROM runs"
+            " ORDER BY started_at DESC, id DESC LIMIT 50)"
+            " WHERE status='failed'").fetchone()["c"]
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
             "runs": rows, "db": str(db_path), "status": status or "",
+            "banner_fails": banner,
+        })
+
+    @app.get("/stats", response_class=HTMLResponse)
+    def stats_page(request: Request):
+        return _TEMPLATES.TemplateResponse(request, "stats.html", {
+            "s": _stats(conn), "db": str(db_path),
         })
 
     @app.get("/run/{run_id}/tree", response_class=HTMLResponse)

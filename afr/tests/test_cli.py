@@ -73,6 +73,19 @@ def test_empty_db_guide_page(tmp_path):
     assert r.status_code == 200 and "暂无录制" in r.text
 
 
+def test_stats_page_and_failure_banner(tmp_path):
+    """D17 A+B: monitoring overview renders; failed-run banner appears."""
+    db = tmp_path / "t.db"
+    _seed(db, [("fa", "failed", {"sources": []}),
+               ("pb", "ok", {"sources": ["u1"]})])
+    client = TestClient(create_app(db))
+    r = client.get("/stats")
+    assert r.status_code == 200 and "监控概览" in r.text
+    assert "失败" in r.text and "¥" in r.text  # per-flow table + cost column
+    home = client.get("/")
+    assert "次失败" in home.text  # banner counts the 1 failed run
+
+
 def test_corrupt_db_clear_error_nonzero_exit(tmp_path):
     bad = tmp_path / "bad.db"
     bad.write_bytes(b"\x00not a sqlite file at all")
