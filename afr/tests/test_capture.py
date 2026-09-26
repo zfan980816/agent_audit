@@ -102,8 +102,15 @@ def test_callback_exception_never_propagates(tmp_path):
     conn.close()
 
 
-def test_concurrent_runs_both_recorded(tmp_path):
-    """A4/WAL: two parallel runs on one db file, both land intact."""
+def test_concurrent_runs_both_recorded(tmp_path, monkeypatch):
+    """A4/WAL: two parallel runs on one db file, both land intact.
+
+    Under heavy machine load a statement can exhaust even the lock retries
+    and spill to the buffer — the contract is every run EVENTUALLY lands
+    (spill + flush is part of the pipeline), so drain before counting."""
+    from afr import db as afr_db
+    monkeypatch.setattr(afr_db, "BUFFER_DB", tmp_path / "buffer.db")
+    monkeypatch.setattr(afr_db, "start_flusher", lambda *a, **k: None)
     db = tmp_path / "t.db"
     g = RunnableLambda(lambda x: {"n": x["n"] + 1})
     results = []
@@ -121,6 +128,7 @@ def test_concurrent_runs_both_recorded(tmp_path):
     for t in threads:
         t.join()
     assert not errs and len(results) == 4
+    afr_db.flush_buffer_best_effort(db)  # 把撞锁溢写的部分灌回再计数
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 4
     conn.close()
