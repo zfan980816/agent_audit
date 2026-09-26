@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from .capture import DEFAULT_DB, connect
+from . import db as db_mod
 from .db import DatabaseError, mask_password, resolve_db_url
 from .diff import diff
 
@@ -491,12 +492,13 @@ def _stats(conn):
 
 def create_app(db_url: str) -> FastAPI:
     app = FastAPI(title="Agent Flight Recorder", docs_url=None, redoc_url=None)
-    conn = connect(db_url=db_url)
+    keeper = db_mod.ConnKeeper(db_url)  # survives server-side idle drops
     shown_db = mask_password(db_url)
 
     @app.get("/", response_class=HTMLResponse)
     def traces_page(request: Request, status: str | None = None,
                     q: str | None = None):
+        conn = keeper.get()
         rows = _run_rows(conn, status, q)
         banner = conn.execute(
             "SELECT COUNT(*) c FROM (SELECT status FROM runs"
@@ -505,21 +507,23 @@ def create_app(db_url: str) -> FastAPI:
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
             "runs": rows, "db": shown_db, "status": status or "",
             "q": q or "", "banner_fails": banner,
+            "buffer_backlog": db_mod.buffer_backlog(),
         })
 
     @app.get("/stats", response_class=HTMLResponse)
     def stats_page(request: Request):
         return _TEMPLATES.TemplateResponse(request, "stats.html", {
-            "s": _stats(conn), "db": shown_db,
+            "s": _stats(keeper.get()), "db": shown_db,
         })
 
     @app.get("/run/{run_id}/tree", response_class=HTMLResponse)
     def tree_partial(request: Request, run_id: str):
-        t = _trace_tree(conn, run_id)
+        t = _trace_tree(keeper.get(), run_id)
         return _TEMPLATES.TemplateResponse(request, "tree.html", {"t": t})
 
     @app.get("/run/{run_id}", response_class=HTMLResponse)
     def run_page(request: Request, run_id: str):
+        conn = keeper.get()
         t = _trace_tree(conn, run_id)
         rows = _run_rows(conn)
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
@@ -529,7 +533,7 @@ def create_app(db_url: str) -> FastAPI:
 
     @app.get("/diff", response_class=HTMLResponse)
     def diff_page(request: Request, a: str, b: str):
-        result = diff(conn, a, b)
+        result = diff(keeper.get(), a, b)
         return _TEMPLATES.TemplateResponse(request, "diff.html",
                                            {"d": result})
 

@@ -147,3 +147,27 @@ def test_midrun_failure_spills_tail_and_upserts_status(tmp_path):
 def test_flush_no_buffer_file_is_zero(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "BUFFER_DB", tmp_path / "nonexistent.db")
     assert db.flush_buffer(_url(tmp_path / "p.db")) == 0
+
+
+def test_backlog_reported_while_down_cleared_after_flush(tmp_path,
+                                                         monkeypatch):
+    monkeypatch.setattr(db, "BUFFER_DB", tmp_path / "buffer.db")
+    monkeypatch.setattr(db, "start_flusher", lambda *a, **k: None)
+    url = _url(tmp_path / "primary.db")
+    real_open = db.open
+    down = {"yes": True}
+
+    def flaky_open(u=None):
+        if down["yes"] and u == url:
+            raise db.DatabaseError("primary down")
+        return real_open(u)
+
+    monkeypatch.setattr(db, "open", flaky_open)
+    from afr.capture import run
+    run(_Graph(), {"q": 1}, db_url=url)          # spills to the buffer
+
+    down["yes"] = False
+    assert db.flush_buffer_best_effort(url) == 0  # drained -> no backlog
+    down["yes"] = True
+    run(_Graph(), {"q": 1}, db_url=url)          # buffers again
+    assert db.flush_buffer_best_effort(url) == 1  # backlog visible while down

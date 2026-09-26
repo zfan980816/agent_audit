@@ -118,7 +118,31 @@ def test_ddl_template_renders_fully_for_both_backends():
             for ddl in db._TABLES.values():
                 rendered = ddl.format(auto=auto, json=json_type)
                 assert "{" not in rendered and "}" not in rendered
-    assert len(db._TABLES) == 4 and len(db._INDEXES) == 3
+    assert len(db._TABLES) == 4 and len(db._INDEXES) == 4
+
+
+def test_runs_started_at_index_created(tmp_path):
+    conn = connect(tmp_path / "t.db")
+    names = [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'").fetchall()]
+    assert "idx_runs_started" in names
+    conn.close()
+
+
+# -- connection keeper (viewer survives server-side idle drops) --------------
+def test_conn_keeper_reconnects_after_drop(tmp_path):
+    url = "sqlite:///" + str(tmp_path / "t.db").replace("\\", "/")
+    conn = db.open(url)
+    conn.execute("INSERT INTO runs(id) VALUES('r1')")
+    conn.commit()
+    conn.close()
+
+    keeper = db.ConnKeeper(url)
+    c1 = keeper.get()
+    assert c1.execute("SELECT id FROM runs").fetchone()["id"] == "r1"
+    c1.close()  # simulate the server dropping the idle connection
+    c2 = keeper.get()
+    assert c2.execute("SELECT id FROM runs").fetchone()["id"] == "r1"
 
 
 # -- SQL hygiene -----------------------------------------------------------

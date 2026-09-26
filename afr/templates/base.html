@@ -305,6 +305,11 @@
   <a href="/?status=failed">查看失败列表</a> · <a href="/stats">监控概览</a>
 </div>
 {% endif %}
+{% if buffer_backlog %}
+<div class="banner">
+  ⚠ 有 <b>{{ buffer_backlog }}</b> 个执行暂存本地缓冲未入库（数据库不可达），恢复连接后自动回灌
+</div>
+{% endif %}
 <main>{% block body %}{% endblock %}</main>
 </body>
 </html>

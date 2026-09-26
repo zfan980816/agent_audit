@@ -312,7 +312,10 @@ def run(graph, inputs, *, label: str = "", db_path=None, db_url=None):
     back — and clears the buffer — the moment the DB recovers.
     """
     url = db.resolve_db_url(db_url or db_path)
-    db.flush_buffer_best_effort(url)  # recover any outage leftovers first
+    backlog = db.flush_buffer_best_effort(url)  # recover outage leftovers
+    if backlog:
+        print(f"[afr] 注意：{backlog} 个 run 仍在本地缓冲等待回灌"
+              f"（主库不可达），恢复后自动写入", file=sys.stderr)
     rid = uuid.uuid4().hex[:12]
     started = time.strftime("%Y-%m-%dT%H:%M:%S")
     try:

@@ -70,3 +70,29 @@ def test_mysql_viewer_queries():
         conn.execute("DELETE FROM runs WHERE id=?", (rid,))
         conn.commit()
         conn.close()
+
+
+def test_mysql_conn_keeper_sees_runs_recorded_after_viewer_start():
+    """REPEATABLE READ regression: a read-only connection that never ends
+    its transaction freezes at the first snapshot — new runs recorded by
+    other processes would never show up in the viewer."""
+    from afr import db as db_mod
+    url = os.environ["AFR_TEST_MYSQL_URL"]
+    keeper = db_mod.ConnKeeper(url)
+    keeper.get().execute("SELECT COUNT(*) c FROM runs").fetchone()
+
+    writer = _connect()  # a separate process's recorder
+    rid = uuid.uuid4().hex[:12]
+    try:
+        writer.execute(
+            "INSERT INTO runs(id, label, status, started_at)"
+            " VALUES(?,?,?,?)", (rid, "snap-check", "ok",
+                                 "2026-09-26T12:00:00"))
+        writer.commit()
+        seen = keeper.get().execute(
+            "SELECT id FROM runs WHERE id=?", (rid,)).fetchone()
+        assert seen is not None, "viewer 连接必须看到启动后新录制的 run"
+    finally:
+        writer.execute("DELETE FROM runs WHERE id=?", (rid,))
+        writer.commit()
+        writer.close()

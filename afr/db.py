@@ -178,6 +178,10 @@ class DB:
         with self._lock:
             self._raw.commit()
 
+    def rollback(self):
+        with self._lock:
+            self._raw.rollback()
+
     def close(self):
         with self._lock:
             self._raw.close()
@@ -201,6 +205,7 @@ CREATE TABLE IF NOT EXISTS tool_calls(
 CREATE INDEX IF NOT EXISTS idx_llm_key ON llm_calls(run_id, key_hash);
 CREATE INDEX IF NOT EXISTS idx_tool_key ON tool_calls(run_id, tool_name, args_hash);
 CREATE INDEX IF NOT EXISTS idx_ev_run ON events(run_id, seq);
+CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at);
 """
 
 # Same-process serialization for first-time schema creation: concurrent
@@ -343,12 +348,18 @@ class FailoverConn:
             self._buffer = open_buffer()
         for sql, params in self._journal:
             self._buffer.execute(sql, params)
-        # guarantee the run row exists in the buffer even when the primary
-        # already committed it (flush upserts the final status onto it)
-        self._buffer.execute(
-            "INSERT OR REPLACE INTO runs(id, label, status, started_at)"
-            " VALUES(?,?,?,?)",
-            (self._rid, self._label, "running", self._started))
+        # Only reconstruct the run row when statements were actually sent to
+        # the primary (mid-run failure): it may already be committed there,
+        # and flush upserts the final status onto it. With an empty journal
+        # (primary down at run start) the very statement triggering this
+        # spill is the run INSERT itself — pre-writing the row here would
+        # collide with it (UNIQUE constraint), and an ambiguous commit
+        # failure must not resurrect a 'running' row over the final status.
+        if self._journal:
+            self._buffer.execute(
+                "INSERT OR REPLACE INTO runs(id, label, status, started_at)"
+                " VALUES(?,?,?,?)",
+                (self._rid, self._label, "running", self._started))
         self._buffer.commit()
         self._journal.clear()
         start_flusher(self._db_url)
@@ -437,12 +448,68 @@ def _flush_loop(db_url: str):
             continue  # primary still down; keep retrying
 
 
-def flush_buffer_best_effort(db_url: str):
-    """Recover outage leftovers opportunistically (called at every run())."""
+def buffer_backlog() -> int:
+    """Runs currently sitting in the local buffer (0 when none/healthy)."""
+    if not BUFFER_DB.exists():
+        return 0
+    try:
+        buf = open_buffer()
+        try:
+            return buf.execute("SELECT COUNT(*) c FROM runs").fetchone()["c"]
+        finally:
+            buf.close()
+    except Exception:
+        return 0
+
+
+def flush_buffer_best_effort(db_url: str) -> int:
+    """Recover outage leftovers opportunistically; returns backlog count.
+
+    Called at every afr.run(): a healthy primary drains the buffer (0);
+    an unreachable one leaves the backlog reported so callers can warn.
+    """
     try:
         flush_buffer(db_url)
     except Exception:
         pass  # still down — this run's writes will spill to the buffer again
+    return buffer_backlog()
+
+
+class ConnKeeper:
+    """Keeps one viewer connection alive across server-side drops.
+
+    MySQL kills idle connections (wait_timeout, 8h by default); without
+    a probe the viewer turns every page into a 500 after a few idle
+    hours. get() pings with a cheap SELECT 1 and transparently reopens.
+
+    The probe is followed by rollback(): on a read-only connection with
+    autocommit off, MySQL's default REPEATABLE READ freezes the read
+    snapshot at the first SELECT — every later page would keep showing
+    the data as of viewer startup, and new runs would never appear.
+    Ending the read transaction after each probe gives every request a
+    fresh snapshot.
+    """
+
+    def __init__(self, db_url: str):
+        self._url = db_url
+        self._conn: DB | None = None
+        self._lock = threading.Lock()
+
+    def get(self) -> DB:
+        with self._lock:
+            if self._conn is not None:
+                try:
+                    self._conn.execute("SELECT 1").fetchone()
+                    self._conn.rollback()  # fresh snapshot per request
+                    return self._conn
+                except Exception:
+                    try:
+                        self._conn.close()
+                    except Exception:
+                        pass
+                    self._conn = None
+            self._conn = open(self._url)
+            return self._conn
 
 
 # -- public factory ----------------------------------------------------------
@@ -480,13 +547,23 @@ def _open_mysql(url: str) -> DB:
             host=u.hostname or "127.0.0.1", port=u.port or 3306,
             user=unquote(u.username or "root"),
             password=unquote(u.password or ""),
-            database=database, autocommit=False, charset="utf8mb4")
+            database=database, autocommit=False, charset="utf8mb4",
+            # a half-open network (firewall tarpit) must never hang the
+            # business run: fail fast, spill to the buffer, retry later
+            connect_timeout=10, read_timeout=10, write_timeout=10)
     except Exception as exc:
         raise DatabaseError(
             f"mysql: 连接失败 ({mask_password(url)}): {exc}") from exc
     conn = DB(raw, DIALECTS["mysql"])
-    with _SCHEMA_LOCK:
-        _ensure_schema_probe(conn, "LONGTEXT")
+    try:
+        with _SCHEMA_LOCK:
+            _ensure_schema_probe(conn, "LONGTEXT")
+    except Exception as exc:
+        conn.close()
+        if isinstance(exc, DatabaseError):
+            raise
+        raise DatabaseError(
+            f"mysql: 初始化失败: {exc.__class__.__name__}: {exc}") from exc
     return conn
 
 
@@ -522,9 +599,12 @@ def _open_dm(url: str) -> DB:
             conn.commit()
         with _SCHEMA_LOCK:
             _ensure_schema_probe(conn, "CLOB")
-    except Exception:
+    except Exception as exc:
         conn.close()
-        raise
+        if isinstance(exc, DatabaseError):
+            raise
+        raise DatabaseError(
+            f"dm: 初始化失败: {exc.__class__.__name__}: {exc}") from exc
     return conn
 
 
@@ -558,6 +638,9 @@ _INDEXES = (
     "CREATE INDEX idx_llm_key ON llm_calls(run_id, key_hash)",
     "CREATE INDEX idx_tool_key ON tool_calls(run_id, tool_name, args_hash)",
     "CREATE INDEX idx_ev_run ON events(run_id, seq)",
+    # list/stats pages sort by started_at; without this the home page is a
+    # full-table filesort once runs reach tens of thousands
+    "CREATE INDEX idx_runs_started ON runs(started_at)",
 )
 
 _ALREADY_EXISTS = ("duplicate", "already exist", "已存在", "exists",
@@ -565,11 +648,23 @@ _ALREADY_EXISTS = ("duplicate", "already exist", "已存在", "exists",
 
 
 def _probe_ok(conn: DB, sql: str) -> bool:
+    """True = query ran; False = object genuinely missing; else re-raise.
+
+    A dead/half-open connection (InterfaceError, timeouts, MySQL 2006/2013)
+    must NOT be mistaken for "table missing" — that would turn an outage
+    into bogus DDL attempts. Only clean does-not-exist errors count as
+    missing.
+    """
     try:
         conn.execute(sql).fetchone()
         return True
-    except Exception:
-        return False
+    except Exception as exc:
+        name = exc.__class__.__name__.lower()
+        msg = str(exc).lower()
+        if ("table" in msg or "exist" in msg or name == "programmingerror"
+                or "42s02" in msg or "no such" in msg):
+            return False
+        raise
 
 
 def _ensure_schema_probe(conn: DB, json_type: str):
@@ -577,6 +672,14 @@ def _ensure_schema_probe(conn: DB, json_type: str):
 
     Called on every connect; the user never runs DDL by hand.
     """
+    # distinguish "server unreachable" from "table missing": a basic query
+    # must succeed before any probe result can be trusted
+    try:
+        conn.execute("SELECT 1").fetchone()
+    except Exception as exc:
+        raise DatabaseError(
+            f"数据库连接后无法执行查询（网络半开或权限问题）: "
+            f"{exc.__class__.__name__}: {exc}") from exc
     auto = "BIGINT AUTO_INCREMENT" if conn.dialect.name == "mysql" \
         else "BIGINT IDENTITY(1,1)"  # dm: identity works in every compat mode
     for table, ddl in _TABLES.items():
@@ -586,7 +689,9 @@ def _ensure_schema_probe(conn: DB, json_type: str):
                 conn.commit()
             except Exception as exc:  # another process created it first
                 if not any(s in str(exc).lower() for s in _ALREADY_EXISTS):
-                    raise DatabaseError(f"建表失败 {table}: {exc}") from exc
+                    raise DatabaseError(
+                        f"建表失败 {table}: {exc.__class__.__name__}: {exc}"
+                    ) from exc
     for ddl in _INDEXES:
         try:
             conn.execute(ddl)
