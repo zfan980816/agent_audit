@@ -181,6 +181,18 @@
                border-top: 1px solid var(--n-100); }
   .wf-row.sub .wf-detail { padding-left: 30px; }
   .sub-note { color: var(--n-400); font-size: 12px; }
+  /* 次要按钮（diff 入口等） */
+  .btn { display: inline-flex; align-items: center; gap: 4px;
+         border: 1px solid var(--n-300); border-radius: var(--r-md);
+         background: #fff; color: var(--n-700); font-size: 12px;
+         font-weight: 500; padding: 2px 10px; margin-left: 4px; }
+  .btn:hover { background: var(--n-50); border-color: var(--n-400);
+               text-decoration: none; color: var(--n-900); }
+  .first-err { margin-top: 6px; padding-top: 6px;
+               border-top: 1px solid var(--red-100); }
+  .first-err b { color: var(--red-600); }
+  .first-err .mono { font-family: var(--font-mono); font-size: 11.5px;
+                     color: var(--red-600); word-break: break-all; }
   .detail-title { display: flex; align-items: center; gap: 10px;
                   margin-bottom: 6px; }
   .detail-title .t { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }

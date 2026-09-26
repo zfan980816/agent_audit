@@ -304,8 +304,41 @@ def _trace_tree(conn, run_id: str):
     models = [r[0] for r in conn.execute(
         "SELECT DISTINCT model FROM llm_calls WHERE run_id=? AND model != '?'"
         " ORDER BY model", (run_id,))]
+    # failure diagnosis: first child that errored (node + tool/llm + message)
+    first_error = None
+    for n in nodes:
+        for c in n["children"]:
+            if c.get("ok", True):
+                continue
+            msg = None
+            if c["type"] == "llm" and (c.get("resp") or {}).get("err"):
+                msg = c["resp"]["content"]
+            elif c["type"] == "tool":
+                msg = str((c.get("tc") or {}).get("result"))[:300]
+            first_error = {"node": n["node"], "name": c["name"], "msg": msg}
+            break
+        if first_error:
+            break
+    # best diff counterpart: latest same-label run of the OPPOSITE status,
+    # falling back to any latest same-label run (LangSmith has no such
+    # one-click jump — this is our first-divergence workflow's front door)
+    pair = None
+    opposite = {"failed": "ok", "ok": "failed"}.get(meta["status"])
+    if opposite:
+        r = conn.execute(
+            "SELECT id FROM runs WHERE status=? AND label IS ? AND id != ?"
+            " ORDER BY started_at DESC, id DESC LIMIT 1",
+            (opposite, meta["label"], run_id)).fetchone()
+        pair = r["id"] if r else None
+    if not pair:
+        r = conn.execute(
+            "SELECT id FROM runs WHERE label IS ? AND id != ?"
+            " ORDER BY started_at DESC, id DESC LIMIT 1",
+            (meta["label"], run_id)).fetchone()
+        pair = r["id"] if r else None
     return {"meta": meta, "nodes": nodes, "total": total, "tokens": tokens,
-            "cost": cost, "models": models,
+            "cost": cost, "models": models, "first_error": first_error,
+            "diff_pair": pair,
             "span": span, "slow": total > 30.0, "started": started}
 
 

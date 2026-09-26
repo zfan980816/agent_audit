@@ -19,6 +19,12 @@
 <div class="detail-title">
   <span class="t">{{ t.meta["label"] or "#" ~ t.meta["id"] }}</span>
   <span class="badge {{ t.meta['status'] }}">{{ t.meta["status"] }}</span>
+  {% if t.diff_pair %}
+  <a class="btn" href="/diff?a={{ t.meta['id'] }}&b={{ t.diff_pair }}"
+     title="与 {% if t.meta['status'] == 'failed' %}最近一次成功{% else %}最近一次失败{% endif %}的同任务执行对比，自动定位首个分歧">
+    {% if t.meta['status'] == 'failed' %}与最近一次成功对比{% else %}对比{% endif %}
+  </a>
+  {% endif %}
 </div>
 <div class="meta-chips">
   <span class="chip">#{{ t.meta["id"] }}{% if t.meta["fork_of"] %} · fork of {{ t.meta["fork_of"] }}{% endif %}</span>
@@ -29,7 +35,16 @@
   {% if t.models %}<span class="chip">模型 <b>{{ t.models|join("、") }}</b></span>{% endif %}
   <span class="chip">节点 <b>{{ t.nodes|length }}</b></span>
 </div>
-{% if t.meta["error"] %}<div class="errbox">{{ t.meta["error"] }}</div>{% endif %}
+{% if t.meta["error"] %}
+<div class="errbox">{{ t.meta["error"] }}
+{% if t.first_error %}
+<div class="first-err">
+  首个出错节点：<b>{{ t.first_error.node }}</b> · {{ t.first_error.name }}
+  {% if t.first_error.msg %}<br><span class="mono">{{ t.first_error.msg }}</span>{% endif %}
+</div>
+{% endif %}
+</div>
+{% endif %}
 
 {% if t.nodes %}
 <div class="panel">
