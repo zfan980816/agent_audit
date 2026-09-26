@@ -502,7 +502,7 @@ def _stats(conn):
         " WHERE tokens IS NOT NULL GROUP BY run_id, model").fetchall()
     tok_by_run: dict[str, dict[str, int]] = {}
     for r in tok_rows:
-        tok_by_run.setdefault(r["run_id"], {})[r["model"]] = r["t"]
+        tok_by_run.setdefault(r["run_id"], {})[r["model"]] = int(r["t"] or 0)  # SUM:MySQL 回 Decimal,归一成 int
 
     flows: dict[str, dict] = {}
     models: dict[str, dict] = {}
