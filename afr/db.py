@@ -26,7 +26,9 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import threading
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -238,6 +240,209 @@ def _open_sqlite(path: str) -> DB:
     with _SCHEMA_LOCK:
         _ensure_schema_sqlite(raw)
     return DB(raw, DIALECTS["sqlite"])
+
+
+# -- outage buffering: sqlite spill + auto flush ----------------------------
+# 正式部署时中心库(MySQL/达梦)是不可控依赖:网络抖动/重启期间录制绝不能
+# 丢数据、更不能拖挂业务流程。FailoverConn 把每次写入先发往主库,主库一旦
+# 写失败,未确认的语句和后续所有写入转存本地 SQLite 缓冲;后台线程一旦探到
+# 主库恢复,立即整 run 回灌并清空缓冲。
+BUFFER_DB = Path.home() / ".afr" / "buffer.db"
+
+_RUNS_COLS = ("id", "label", "status", "started_at", "finished_at", "error",
+              "fork_of")
+_TABLE_COLS = {
+    "events": ("run_id", "seq", "ts", "kind", "node", "payload"),
+    "llm_calls": ("run_id", "seq", "node", "model", "key_hash",
+                  "request_json", "response_json", "kind", "tokens", "dur",
+                  "params_json", "meta_json"),
+    "tool_calls": ("run_id", "seq", "node", "tool_name", "args_hash",
+                   "args_json", "result_json", "kind"),
+}
+
+
+def open_buffer() -> DB:
+    """The local spill buffer (always sqlite, same schema as the primary)."""
+    return _open_sqlite(str(BUFFER_DB))
+
+
+class _EmptyCursor:
+    rowcount = 0
+
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
+    def __iter__(self):
+        return iter(())
+
+
+class FailoverConn:
+    """Primary-DB facade that spills to the sqlite buffer on outage.
+
+    - every write goes to the primary first; the moment one fails, the
+      not-yet-confirmed statements are replayed into BUFFER_DB (with a
+      reconstructed run row) and all further writes land there;
+    - the journal only ever holds the current unconfirmed batch (the
+      recorder commits after every statement), so replaying it can never
+      duplicate rows already committed on the primary;
+    - a background flusher moves buffered runs back into the primary and
+      clears them as soon as it is reachable again.
+    """
+
+    def __init__(self, primary, run_id: str, label: str, started: str,
+                 db_url: str):
+        self._primary = primary          # None = primary down at run start
+        self._rid = run_id
+        self._label = label or ""
+        self._started = started
+        self._db_url = db_url
+        self._buffer: DB | None = None
+        self._failed = primary is None
+        self._journal: list[tuple[str, tuple]] = []
+
+    def execute(self, sql, params=()):
+        if self._failed:
+            if self._buffer is None:
+                self._spill()
+            cur = self._buffer.execute(sql, params)
+            self._buffer.commit()
+            return cur
+        self._journal.append((sql, tuple(params)))
+        try:
+            return self._primary.execute(sql, params)
+        except Exception:
+            self._failed = True
+            self._spill()  # replays the journal, including this statement
+            return _EmptyCursor()
+
+    def commit(self):
+        if self._failed:
+            self._buffer.commit()
+            return
+        try:
+            self._primary.commit()
+            self._journal.clear()
+        except Exception:
+            self._failed = True
+            self._spill()
+            self._buffer.commit()
+
+    def close(self):
+        for c in (self._primary, self._buffer):
+            if c is not None:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+
+    def _spill(self):
+        if self._buffer is None:
+            self._buffer = open_buffer()
+        for sql, params in self._journal:
+            self._buffer.execute(sql, params)
+        # guarantee the run row exists in the buffer even when the primary
+        # already committed it (flush upserts the final status onto it)
+        self._buffer.execute(
+            "INSERT OR REPLACE INTO runs(id, label, status, started_at)"
+            " VALUES(?,?,?,?)",
+            (self._rid, self._label, "running", self._started))
+        self._buffer.commit()
+        self._journal.clear()
+        start_flusher(self._db_url)
+
+
+def flush_buffer(db_url: str) -> int:
+    """Move every buffered run into the primary DB; returns run count.
+
+    Raises when the primary is unreachable (callers retry). Each run moves
+    inside one primary transaction, and buffer rows are deleted only after
+    that commit — a crash mid-flush leaves the buffer intact, never
+    half-lost and never duplicated.
+    """
+    if not BUFFER_DB.exists():
+        return 0
+    buf = open_buffer()
+    try:
+        rids = [r["id"] for r in buf.execute("SELECT id FROM runs").fetchall()]
+        if not rids:
+            return 0
+        primary = open(db_url)
+        try:
+            for rid in rids:
+                _flush_run(buf, primary, rid)
+            return len(rids)
+        finally:
+            primary.close()
+    finally:
+        buf.close()
+
+
+def _flush_run(buf: DB, primary: DB, rid: str):
+    row = buf.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+    vals = [row[c] for c in _RUNS_COLS]
+    if primary.execute("SELECT id FROM runs WHERE id=?", (rid,)).fetchone():
+        primary.execute(
+            "UPDATE runs SET label=?, status=?, started_at=?, finished_at=?,"
+            " error=?, fork_of=? WHERE id=?",
+            (vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], rid))
+    else:
+        primary.execute(
+            "INSERT INTO runs(id, label, status, started_at, finished_at,"
+            " error, fork_of) VALUES(?,?,?,?,?,?,?)", vals)
+    for table, cols in _TABLE_COLS.items():
+        rows = buf.execute(
+            f"SELECT {','.join(cols)} FROM {table} WHERE run_id=?",
+            (rid,)).fetchall()
+        ph = ",".join("?" * len(cols))
+        for r in rows:
+            primary.execute(
+                f"INSERT INTO {table}({','.join(cols)}) VALUES({ph})",
+                tuple(r[c] for c in cols))
+    primary.commit()
+    for table in _TABLE_COLS:  # success → clear this run from the buffer
+        buf.execute(f"DELETE FROM {table} WHERE run_id=?", (rid,))
+    buf.execute("DELETE FROM runs WHERE id=?", (rid,))
+    buf.commit()
+
+
+_FLUSHER: threading.Thread | None = None
+_FLUSHER_LOCK = threading.Lock()
+
+
+def start_flusher(db_url: str):
+    """Spawn (once) the daemon thread retrying flush every few seconds."""
+    global _FLUSHER
+    with _FLUSHER_LOCK:
+        if _FLUSHER and _FLUSHER.is_alive():
+            return
+        _FLUSHER = threading.Thread(target=_flush_loop, args=(db_url,),
+                                    daemon=True, name="afr-buffer-flush")
+        _FLUSHER.start()
+
+
+def _flush_loop(db_url: str):
+    while True:
+        time.sleep(3)
+        try:
+            n = flush_buffer(db_url)
+            if n:
+                print(f"[afr] 数据库已恢复，缓冲数据已回灌 {n} 个 run",
+                      file=sys.stderr)
+            if n == 0:  # buffer empty (or file gone) — job done
+                return
+        except Exception:
+            continue  # primary still down; keep retrying
+
+
+def flush_buffer_best_effort(db_url: str):
+    """Recover outage leftovers opportunistically (called at every run())."""
+    try:
+        flush_buffer(db_url)
+    except Exception:
+        pass  # still down — this run's writes will spill to the buffer again
 
 
 # -- public factory ----------------------------------------------------------

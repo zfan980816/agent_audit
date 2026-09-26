@@ -306,14 +306,27 @@ def run(graph, inputs, *, label: str = "", db_path=None, db_url=None):
     unchanged (the recorder must never mask a real failure); the run row
     is marked failed and the error stored first. `db_url` targets any
     backend (mysql://…, dm://…); `db_path` stays the sqlite shorthand.
+
+    If the configured DB is unreachable (or dies mid-run), recording
+    spills to the local sqlite buffer and a background flusher writes it
+    back — and clears the buffer — the moment the DB recovers.
     """
+    url = db.resolve_db_url(db_url or db_path)
+    db.flush_buffer_best_effort(url)  # recover any outage leftovers first
     rid = uuid.uuid4().hex[:12]
-    conn = connect(db_path, db_url=db_url)
+    started = time.strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        primary = db.open(url)
+    except db.DatabaseError:
+        primary = None
+        print(f"[afr] 数据库不可达（{db.mask_password(url)}），"
+              f"本次运行暂存本地缓冲，恢复后自动回灌", file=sys.stderr)
+    conn = db.FailoverConn(primary, rid, label, started, url)
     try:
         conn.execute(
             "INSERT INTO runs(id, label, status, started_at) VALUES(?,?,?,?)",
             (rid, label or getattr(graph, "name", "") or "", "running",
-             time.strftime("%Y-%m-%dT%H:%M:%S")),
+             started),
         )
         conn.commit()
         handler = Recorder(conn, rid, label)
