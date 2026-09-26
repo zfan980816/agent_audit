@@ -566,6 +566,10 @@ def main(argv=None) -> int:
     r.add_argument("--yes", action="store_true",
                    help="工具未命中时默认同意真实执行（跳过征询）")
 
+    c = sub.add_parser("clean", help="清理 N 天前的录制数据")
+    c.add_argument("--days", type=int, default=None,
+                   help="保留最近 N 天（默认取 $AFR_RETAIN_DAYS/配置，再默认 30）")
+
     args = ap.parse_args(argv)
     url = resolve_db_url(args.db)  # param > $AFR_DB_URL > config > default
 
@@ -605,6 +609,15 @@ def main(argv=None) -> int:
         _, tel = do_replay(graph, {}, source_run_id=args.run_id,
                            db_url=url, assume_yes=args.yes)
         print(f"重放完成，fork run = {tel['fork_run']}")
+        return 0
+    if args.cmd == "clean":
+        from .capture import cleanup, retain_days
+        conn = _open_db(url)
+        days = args.days or retain_days() or 30
+        n = cleanup(conn, days)
+        print(f"已删除 {n['runs']} 个 run（events {n['events']}"
+              f" / llm_calls {n['llm_calls']} / tool_calls {n['tool_calls']}），"
+              f"保留最近 {days} 天")
         return 0
 
     ap.print_help()

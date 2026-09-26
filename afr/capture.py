@@ -13,6 +13,8 @@ Design refs (2026-09-25 eng review):
 from __future__ import annotations
 
 import json
+import os
+import random
 import sys
 import threading
 import time
@@ -23,6 +25,95 @@ from langchain_core.callbacks import BaseCallbackHandler
 from . import db
 
 DEFAULT_DB = db.DEFAULT_DB  # re-export: cli/__init__ import this
+
+
+# -- production controls: record switch / sampling / retention -------------
+def _config() -> dict:
+    """~/.afr/config.json as a dict ({} on any failure)."""
+    try:
+        return json.loads(db.CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _parse_record(v) -> float:
+    """record setting -> sampling probability 0.0..1.0 (bad value = record)."""
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip().lower()
+    if s in ("0", "false", "off", "no"):
+        return 0.0
+    if s in ("1", "true", "on", "yes"):
+        return 1.0
+    try:
+        return float(s)
+    except ValueError:
+        return 1.0  # fail open: an unparseable switch must not lose capture
+
+
+def record_prob(param=None, env: dict | None = None) -> float:
+    """Precedence: run(record=…) > $AFR_RECORD > config 'record' > always."""
+    if param is not None:
+        return _parse_record(param)
+    env = os.environ if env is None else env
+    if env.get("AFR_RECORD"):
+        return _parse_record(env["AFR_RECORD"])
+    return _parse_record(_config().get("record", 1.0))
+
+
+def retain_days(env: dict | None = None) -> int | None:
+    """Retention window in days: $AFR_RETAIN_DAYS > config 'retain_days'."""
+    env = os.environ if env is None else env
+    v = env.get("AFR_RETAIN_DAYS") or _config().get("retain_days")
+    try:
+        return int(v) if v not in (None, "", False) else None
+    except (TypeError, ValueError):
+        return None
+
+
+_AUTO_CLEAN_AT = 0.0  # last auto-cleanup ts (module level; >=1h apart)
+
+
+def cleanup(conn, days: int) -> dict:
+    """Delete runs older than `days` (and their events/llm/tool rows).
+
+    Returns per-table deleted counts. Works on every backend; started_at
+    is a plain string so the cutoff compares lexicographically.
+    """
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%S",
+                           time.localtime(max(0.0, time.time() - days * 86400)))
+    counts = {}
+    for table in ("events", "llm_calls", "tool_calls"):
+        cur = conn.execute(
+            f"DELETE FROM {table} WHERE run_id IN"
+            " (SELECT id FROM runs WHERE started_at < ?)", (cutoff,))
+        counts[table] = cur.rowcount
+        conn.commit()
+    cur = conn.execute("DELETE FROM runs WHERE started_at < ?", (cutoff,))
+    counts["runs"] = cur.rowcount
+    conn.commit()
+    return counts
+
+
+def _maybe_autoclean(conn):
+    """Apply retain_days at most once per hour per process (cheap guard)."""
+    global _AUTO_CLEAN_AT
+    days = retain_days()
+    if not days or days <= 0:
+        return
+    now = time.time()
+    if now - _AUTO_CLEAN_AT < 3600:
+        return
+    _AUTO_CLEAN_AT = now
+    try:
+        n = cleanup(conn, days)
+        if n["runs"]:
+            print(f"[afr] 自动清理: 删除 {n['runs']} 个超过 {days} 天的 run",
+                  file=sys.stderr)
+    except Exception as exc:  # cleanup must never kill the run (A5 spirit)
+        _stderr(f"auto-clean skipped: {exc.__class__.__name__}: {exc}")
 
 
 def connect(db_path=None, db_url: str | None = None) -> db.DB:
@@ -299,16 +390,25 @@ def _jsonable(obj):
     return repr(obj)
 
 
-def run(graph, inputs, *, label: str = "", db_path=None, db_url=None):
+def run(graph, inputs, *, label: str = "", db_path=None, db_url=None,
+        record=None):
     """The one-function API: run a graph under the flight recorder.
 
     Mirrors graph.invoke(inputs). The run's own exceptions propagate
     unchanged (the recorder must never mask a real failure); the run row
     is marked failed and the error stored first. `db_url` targets any
     backend (mysql://…, dm://…); `db_path` stays the sqlite shorthand.
+
+    Production switch: `record` (bool or 0..1 sampling probability,
+    param > $AFR_RECORD > config 'record' > always). When 0 / sampled
+    out, the graph runs with ZERO recorder overhead and nothing is stored.
     """
+    prob = record_prob(record)
+    if prob <= 0.0 or (prob < 1.0 and random.random() >= prob):
+        return graph.invoke(inputs)
     rid = uuid.uuid4().hex[:12]
     conn = connect(db_path, db_url=db_url)
+    _maybe_autoclean(conn)
     try:
         conn.execute(
             "INSERT INTO runs(id, label, status, started_at) VALUES(?,?,?,?)",
