@@ -91,7 +91,8 @@
         {% endif %}
         {% if e.inputs_p is not none %}
         <details>
-          <summary>入口完整状态（LangGraph 全量传入，含其他节点字段，点击展开）</summary>
+          <summary>入口状态 · {{ e.inputs_k|length }} 个字段（LangGraph 传入全量 state，点击展开）</summary>
+          <div class="sub-note">字段：{{ e.inputs_k|join("、") }}</div>
           <pre>{{ e.inputs_p }}</pre>
         </details>
         {% endif %}

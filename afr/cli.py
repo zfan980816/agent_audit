@@ -225,7 +225,8 @@ def _trace_tree(conn, run_id: str):
                 out = json.loads(ev["payload"]).get("outputs")
             except Exception:
                 out = ev["payload"]
-            stream.append((ev["seq"], 2, {"node_output": out}))
+            stream.append((ev["seq"], 2, {"node_output": out,
+                                          "on": ev["node"]}))
     llm_rows = conn.execute(
         "SELECT seq, node, model, kind, request_json, response_json,"
         " tokens, dur, params_json, meta_json FROM llm_calls"
@@ -272,6 +273,7 @@ def _trace_tree(conn, run_id: str):
         stream.append((r["seq"], 1, {
             "type": "llm", "name": r["model"], "ok": r["kind"] == "ok",
             "tokens": r["tokens"], "dur": r["dur"], "ts": ts,
+            "at": r["node"],
             "cost": _cost(r["model"], r["tokens"]),
             "attr_groups": attr_groups,
             "off": off, "wid": wid,
@@ -288,23 +290,29 @@ def _trace_tree(conn, run_id: str):
         stream.append((r["seq"], 1, {
             "type": "tool", "name": r["tool_name"], "ok": r["kind"] == "ok",
             "tokens": None, "dur": None, "ts": ts,
+            "at": r["node"],
             "off": off, "wid": wid,
             "tc": _tool_cards(r["args_json"], r["result_json"],
                               r["tool_name"])}))
     stream.sort(key=lambda x: (x[0], x[1]))
 
-    nodes, cur = [], None
+    nodes, cur, by_name = [], None, {}
     for _, kind, item in stream:
         if "node" in item and "ts" in item:
             cur = item
             nodes.append(cur)
+            by_name[item["node"]] = item
         elif "node_output" in item:
-            if cur is not None and cur.get("outputs") is None:
-                cur["outputs"] = item["node_output"]
+            tgt = by_name.get(item.get("on")) or cur
+            if tgt is not None and tgt.get("outputs") is None:
+                tgt["outputs"] = item["node_output"]
         elif cur is not None:
             if item.get("tokens") == 0:
                 item["tokens"] = None  # 0 = unknown, display as —
-            cur["children"].append(item)
+            # 归属挂载:llm/tool 自带 node 列,挂到同名节点上——并行节点
+            # 下按"当前节点"挂会全部堆进最后启动的那个(weather 教训);
+            # 无归属(普通链)回退 cur 保持旧行为
+            (by_name.get(item.get("at")) or cur)["children"].append(item)
 
     for i, n in enumerate(nodes):
         nxt = nodes[i + 1]["ts"] if i + 1 < len(nodes) else None
@@ -390,6 +398,8 @@ def _trace_tree(conn, run_id: str):
 
         n["inputs_p"] = _pretty_obj(n["inputs"])
         n["outputs_p"] = _pretty_obj(n["outputs"])
+        n["inputs_k"] = ([str(k) for k in n["inputs"]][:40]
+                         if isinstance(n["inputs"], dict) else [])
         for c in n["children"]:
             if c["type"] == "llm":
                 human = next((m for m in c["cards"]

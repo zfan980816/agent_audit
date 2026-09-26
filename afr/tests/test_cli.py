@@ -92,3 +92,46 @@ def test_corrupt_db_clear_error_nonzero_exit(tmp_path):
     with pytest.raises(SystemExit) as ei:
         main(["--db", str(bad), "diff", "a", "b"])
     assert ei.value.code == 2
+
+
+def test_parallel_nodes_children_attributed(tmp_path):
+    """并行节点的 llm 子行按各自 node 列挂载到同名节点,不得全部堆进
+    最后启动的那个(2026-09-26 实战:所有 qwen 调用都进了 weather)。"""
+    pytest.importorskip("langgraph")
+    import afr
+    from langchain_core.language_models.fake_chat_models import (
+        FakeListChatModel)
+    from langgraph.graph import END, START, StateGraph
+    from typing_extensions import TypedDict
+
+    class S(TypedDict):
+        q: str
+        r: str
+
+    m1 = FakeListChatModel(responses=["a"])
+    m2 = FakeListChatModel(responses=["b"])
+
+    def node_a(state, config=None):
+        return {"q": m1.invoke(["hi"], config=config).content}
+
+    def node_b(state, config=None):
+        return {"r": m2.invoke(["hi"], config=config).content}
+
+    g = StateGraph(S)
+    g.add_node("transport", node_a)
+    g.add_node("weather", node_b)
+    g.add_edge(START, "transport")
+    g.add_edge(START, "weather")
+    g.add_edge("transport", END)
+    g.add_edge("weather", END)
+    afr.run(g.compile(), {"q": "x"}, db_path=tmp_path / "p.db", label="par")
+
+    import sqlite3
+    from afr.cli import _open_db, _trace_tree
+    rid = sqlite3.connect(tmp_path / "p.db").execute(
+        "SELECT id FROM runs").fetchone()[0]
+    tree = _trace_tree(_open_db(str(tmp_path / "p.db")), rid)
+    kids = {n["node"]: [c["type"] for c in n["children"]]
+            for n in tree["nodes"]}
+    assert kids.get("transport") == ["llm"]  # 各归各,不串门
+    assert kids.get("weather") == ["llm"]
