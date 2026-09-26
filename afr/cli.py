@@ -26,6 +26,9 @@ from .capture import DEFAULT_DB, connect
 from .diff import diff
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# render Chinese as-is in {{ x|tojson }} blocks (default escapes to \uXXXX)
+_TEMPLATES.env.policies["json.dumps_kwargs"] = {"ensure_ascii": False,
+                                                "sort_keys": True}
 
 
 def _k(n):
