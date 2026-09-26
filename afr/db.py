@@ -247,8 +247,11 @@ def _open_sqlite(path: str) -> DB:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
     try:
         raw = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
-        raw.execute("PRAGMA journal_mode=WAL")
-        raw.execute("PRAGMA busy_timeout=5000")
+        raw.execute("PRAGMA busy_timeout=5000")  # 先给锁等待资格
+        try:
+            raw.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            pass  # 并发首建同一库时 WAL 设置可能撞锁;默认 journal 也能用
         raw.row_factory = sqlite3.Row
     except sqlite3.DatabaseError as exc:
         raise DatabaseError(f"sqlite: 无法打开 {path}: "
