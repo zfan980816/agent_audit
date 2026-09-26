@@ -79,6 +79,10 @@ class Recorder(BaseCallbackHandler):
         self._lock = threading.Lock()
         self._pending_llm: dict[str, dict] = {}
         self._pending_tool: dict[str, dict] = {}
+        # run_id -> node name, captured at chain START (langchain ≥1.x only
+        # puts langgraph_node in on_chain_start's metadata; chain ends and
+        # llm/tool children must be attributed through their parent run)
+        self._run_node: dict[str, str] = {}
 
     # -- helpers ---------------------------------------------------------
     def _next_seq(self) -> int:
@@ -106,6 +110,20 @@ class Recorder(BaseCallbackHandler):
     def _node(metadata) -> str:
         return (metadata or {}).get("langgraph_node") or "-"
 
+    def _node_from(self, metadata, run_id=None, parent_run_id=None) -> str:
+        """Node attribution for llm/tool callbacks: their own metadata if it
+        carries langgraph_node, else the parent chain's (an llm/tool run's
+        parent is the node chain that invoked it, whose run_id we mapped at
+        its on_chain_start)."""
+        node = self._node(metadata)
+        if node != "-":
+            return node
+        if parent_run_id is not None:
+            node = self._run_node.get(str(parent_run_id), "-")
+        if node == "-" and run_id is not None:
+            node = self._run_node.get(str(run_id), "-")
+        return node
+
     # -- LLM callbacks ----------------------------------------------------
     def on_chat_model_start(self, serialized, messages, *, run_id=None,
                             parent_run_id=None, metadata=None, **kwargs):
@@ -122,7 +140,7 @@ class Recorder(BaseCallbackHandler):
         def store():
             self._pending_llm[str(run_id)] = {
                 "model": model,
-                "node": self._node(metadata),
+                "node": self._node_from(metadata, run_id, parent_run_id),
                 "t0": time.time(),
                 "request_json": canonical_json([m.model_dump() for m in batch]),
                 # invocation_params: temperature / max_tokens / stream ...
@@ -199,7 +217,7 @@ class Recorder(BaseCallbackHandler):
             name = (serialized or {}).get("name") or kwargs.get("name") or "?"
             self._pending_tool[str(run_id)] = {
                 "tool_name": name,
-                "node": self._node(metadata),
+                "node": self._node_from(metadata, run_id, parent_run_id),
                 "args_json": tool_args(input_str),
             }
 
@@ -252,12 +270,15 @@ class Recorder(BaseCallbackHandler):
                        parent_run_id=None, metadata=None, **kwargs):
         node = self._node(metadata)
         if node != "-":
+            self._run_node[str(run_id)] = node
             self._safe(lambda: self._event(
                 "node_start", node, {"inputs": _jsonable(inputs)}))
 
     def on_chain_end(self, outputs, *, run_id=None, parent_run_id=None,
                      metadata=None, **kwargs):
         node = self._node(metadata)
+        if node == "-":
+            node = self._run_node.get(str(run_id), "-")
         if node != "-":
             self._safe(lambda: self._event(
                 "node_output", node, {"outputs": _jsonable(outputs)}))

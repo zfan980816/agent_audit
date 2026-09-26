@@ -83,16 +83,16 @@
       {% for e in n.execs %}
       <details>
         <summary>{% if n.count > 1 %}第{{ loop.index }}次执行 · {% endif %}+{{ "%.1f"|format((e.off or 0) / 100 * (t.total or 0)) }}s · {{ durfmt(e.dur) }}</summary>
-        {% if e.inputs_p is not none %}
-        <details>
-          <summary>节点入口状态（= 上一节点输出）</summary>
-          <pre>{{ e.inputs_p }}</pre>
+        {% if e.outputs_p is not none %}
+        <details open>
+          <summary>本节点写入（仅它变更/产出的字段）</summary>
+          <pre>{{ e.outputs_p }}</pre>
         </details>
         {% endif %}
-        {% if e.outputs_p is not none %}
+        {% if e.inputs_p is not none %}
         <details>
-          <summary>节点输出</summary>
-          <pre>{{ e.outputs_p }}</pre>
+          <summary>入口完整状态（LangGraph 全量传入，含其他节点字段，点击展开）</summary>
+          <pre>{{ e.inputs_p }}</pre>
         </details>
         {% endif %}
         {% if e.inputs_p is none and e.outputs_p is none %}<span class="sub-note">无捕获的状态快照</span>{% endif %}
