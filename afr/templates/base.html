@@ -63,23 +63,33 @@
   #list { width: 460px; min-width: 340px; flex: none; background: #fff;
           border-right: 1px solid var(--n-200); overflow-y: auto; }
   .list-head { position: sticky; top: 0; background: var(--n-25); z-index: 2;
-               display: grid; grid-template-columns: 22px 1fr 62px 56px 62px;
+               display: grid; grid-template-columns: 26px 1fr 78px 56px 62px;
                gap: 6px; padding: 7px 14px; font-size: 11px; font-weight: 600;
                color: var(--n-500); border-bottom: 1px solid var(--n-200);
                letter-spacing: .02em; }
-  .row { display: grid; grid-template-columns: 22px 1fr 62px 56px 62px;
+  .row { display: grid; grid-template-columns: 26px 1fr 78px 56px 62px;
          gap: 6px; padding: 8px 14px; cursor: pointer; align-items: center;
          border-bottom: 1px solid var(--n-100); transition: background .1s; }
   .row:hover { background: var(--n-50); }
   .row.sel { background: var(--brand-50);
              box-shadow: inset 3px 0 0 var(--brand-500); }
   .st { width: 16px; height: 16px; }
-  .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-               font-weight: 500; }
+  .row .name { overflow: hidden; min-width: 0; font-weight: 500;
+               white-space: nowrap; }
+  .row .prev { display: block; color: var(--n-400); font-size: 11px;
+               font-weight: 400; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; font-family: var(--font-ui); }
+  .row .prev.out { color: var(--n-300); }
+  .lat-y { color: var(--yellow-600) !important; }
+  .lat-r, .slow-red { color: var(--red-600); font-weight: 600; }
+  .clk { width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px;
+         color: var(--green-600); }
+  .lat-y .clk { color: var(--yellow-600); }
+  .lat-r .clk { color: var(--red-600); }
   .row .sub { color: var(--n-400); font-size: 11px; font-weight: 400;
               font-family: var(--font-mono); }
   .row .num { color: var(--n-500); font-size: 12px; text-align: right;
-              font-variant-numeric: tabular-nums; }
+              font-variant-numeric: tabular-nums; white-space: nowrap; }
 
   /* 右栏 */
   #detail { flex: 1; overflow-y: auto; padding: 16px 20px; background: var(--n-35); }
@@ -109,7 +119,7 @@
            border-radius: var(--r-lg); box-shadow: var(--shadow-sm);
            overflow: hidden; }
   .wf-head { display: grid;
-             grid-template-columns: minmax(0,1fr) 64px 64px minmax(160px,32%);
+             grid-template-columns: minmax(170px,26%) 60px 62px 70px minmax(260px,1fr);
              gap: 10px; padding: 7px 14px; background: var(--n-25);
              border-bottom: 1px solid var(--n-200); font-size: 11px;
              font-weight: 600; color: var(--n-500); letter-spacing: .02em; }
@@ -120,7 +130,7 @@
   .wf-row > summary { list-style: none; }
   .wf-row > summary::-webkit-details-marker { display: none; }
   .wf-line { display: grid;
-             grid-template-columns: minmax(0,1fr) 64px 64px minmax(160px,32%);
+             grid-template-columns: minmax(170px,26%) 60px 62px 70px minmax(260px,1fr);
              gap: 10px; align-items: center; padding: 7px 14px;
              cursor: pointer; transition: background .1s; }
   .wf-line:hover { background: var(--n-50); }
@@ -164,6 +174,14 @@
                border-top: 1px solid var(--n-100); }
   .wf-row.sub .wf-detail { padding-left: 30px; }
   .sub-note { color: var(--n-400); font-size: 12px; }
+  /* 输入/输出面板（仿 LangSmith peek 视图的 IO 区） */
+  .io-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+            margin-bottom: 12px; }
+  .io-card { background: #fff; border: 1px solid var(--n-200);
+             border-radius: var(--r-lg); box-shadow: var(--shadow-sm);
+             padding: 10px 14px; min-width: 0; }
+  .io-card .mc-head { margin-bottom: 6px; }
+  .io-card pre { max-height: 220px; overflow-y: auto; margin: 0; }
   /* 详情头部 */
   .detail-title { display: flex; align-items: center; gap: 10px;
                   margin-bottom: 6px; }
@@ -185,8 +203,29 @@
   .msgcard.err { border-left-color: var(--red-600);
                  background: var(--red-25); }
   .mc-head { font-size: 11px; font-weight: 600; color: var(--n-500);
-             margin-bottom: 3px; text-transform: uppercase;
-             letter-spacing: .03em; }
+             margin-bottom: 3px; text-transform: none;
+             letter-spacing: .03em; display: flex; align-items: center;
+             gap: 6px; }
+  .mc-icon { flex: none; width: 16px; height: 16px; border-radius: var(--r-sm);
+             display: inline-flex; align-items: center; justify-content: center; }
+  .mc-icon svg { width: 11px; height: 11px; }
+  .mi-user { background: var(--brand-500); }
+  .mi-ai { background: #f79009; }
+  .mi-tool { background: var(--purple-600); }
+  .mi-sys { background: var(--n-400); }
+  /* LLM Attributes 表（仿 LangSmith：key 灰左列 / value 右列 / 细分组） */
+  .attr-wrap { margin: 8px 0 4px; border: 1px solid var(--n-200);
+               border-radius: var(--r-lg); overflow: hidden; background: #fff; }
+  .attr-group { padding: 6px 12px; font-size: 11.5px; font-weight: 600;
+                color: var(--n-700); background: var(--n-25);
+                border-bottom: 1px solid var(--n-100); }
+  table.attr-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.attr-table td { padding: 5px 12px; border-bottom: 1px solid var(--n-50);
+                        vertical-align: top; }
+  table.attr-table tr:last-child td { border-bottom: none; }
+  table.attr-table td.k { width: 42%; color: var(--n-400);
+                          font-family: var(--font-mono); font-size: 11.5px; }
+  table.attr-table td.v { color: var(--n-900); word-break: break-all; }
   .mc-body { font-size: 12.5px; white-space: pre-wrap; word-break: break-all;
              color: var(--n-900); }
   .mc-tool { margin: 4px 0; }
@@ -202,7 +241,6 @@
             color: var(--red-600); border-radius: var(--r-lg);
             padding: 9px 13px; margin: 8px 0; font-family: var(--font-mono);
             font-size: 12px; white-space: pre-wrap; }
-  .slow-red { color: var(--red-600); font-weight: 600; }
   .empty { color: var(--n-400); padding: 48px; text-align: center;
            font-size: 13px; }
   a { color: var(--brand-500); text-decoration: none; }

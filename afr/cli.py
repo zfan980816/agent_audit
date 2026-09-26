@@ -27,6 +27,24 @@ from .diff import diff
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+
+def _k(n):
+    """LangSmith token notation: 190 -> '190', 3297 -> '3.297K'."""
+    if not n:
+        return "—"
+    if n < 1000:
+        return str(n)
+    s = f"{n / 1000:.3f}".rstrip("0").rstrip(".")
+    return f"{s}K"
+
+
+def _lat_class(v):
+    """LangSmith latency colors: green <10s, amber <60s, red beyond."""
+    if v is None:
+        return ""
+    return "" if v < 10 else ("lat-y" if v < 60 else "lat-r")
+
+
 _LIST_SQL = """
 SELECT r.id, r.label, r.status, r.started_at, r.finished_at, r.error, r.fork_of,
   CASE WHEN r.finished_at IS NULL THEN NULL
@@ -39,10 +57,50 @@ ORDER BY r.started_at DESC, r.id DESC LIMIT 200
 """
 
 
+_TEMPLATES.env.globals.update(_k=_k, _lat_cls=_lat_class)
+
+
 def _run_rows(conn, status: str | None = None):
     where = "WHERE r.status = ?" if status else ""
     args = (status,) if status else ()
     return conn.execute(_LIST_SQL.format(where=where), args).fetchall()
+
+
+def _preview(obj, limit=88):
+    """One-line run input/output preview for the traces list."""
+    try:
+        s = obj if isinstance(obj, str) else json.dumps(
+            obj, ensure_ascii=False, default=str)
+    except Exception:
+        s = str(obj)
+    s = " ".join(s.split())
+    return s[:limit] + ("…" if len(s) > limit else "")
+
+
+def _run_previews(conn, run_ids):
+    """first node input + last node output per run (LangSmith Input/Output columns)."""
+    if not run_ids:
+        return {}
+    marks = ",".join("?" * len(run_ids))
+    out = {}
+    for kind, agg in (("node_start", "MIN"), ("node_output", "MAX")):
+        rows = conn.execute(
+            f"SELECT e.run_id, e.payload FROM events e"
+            f" JOIN (SELECT run_id, {agg}(seq) s FROM events"
+            f"        WHERE kind=? AND run_id IN ({marks}) GROUP BY run_id) g"
+            f" ON e.run_id=g.run_id AND e.seq=g.s",
+            (kind, *run_ids)).fetchall()
+        for r in rows:
+            try:
+                payload = json.loads(r["payload"])
+                val = payload.get("inputs" if kind == "node_start"
+                                  else "outputs")
+            except Exception:
+                val = None
+            slot = out.setdefault(r["run_id"], {})
+            slot["inp" if kind == "node_start" else "out"] = _preview(val) \
+                if val is not None else None
+    return out
 
 
 def _pretty(js: str | None) -> str:
@@ -161,6 +219,11 @@ def _trace_tree(conn, run_id: str):
         return round(off, 1), (round(wid, 1) if wid is not None else None)
 
     stream = []
+    prices = _prices()
+
+    def _cost(model, tokens):
+        return ((tokens or 0) / 1000.0) * _price_for(model, prices)
+
     for ev in events:
         if ev["kind"] == "node_start":
             try:
@@ -178,8 +241,8 @@ def _trace_tree(conn, run_id: str):
             stream.append((ev["seq"], 2, {"node_output": out}))
     llm_rows = conn.execute(
         "SELECT seq, node, model, kind, request_json, response_json,"
-        " tokens, dur FROM llm_calls WHERE run_id=? ORDER BY seq",
-        (run_id,)).fetchall()
+        " tokens, dur, params_json, meta_json FROM llm_calls"
+        " WHERE run_id=? ORDER BY seq", (run_id,)).fetchall()
     for i, r in enumerate(llm_rows):
         # the llm event fires in on_llm_end, so its ts is the END of the
         # call; subtract dur to get the true bar start
@@ -187,9 +250,43 @@ def _trace_tree(conn, run_id: str):
         if ts is not None and r["dur"]:
             ts = ts - r["dur"]
         off, wid = _gantt(ts, r["dur"])
+
+        def _load(js):
+            try:
+                return json.loads(js) if js else None
+            except Exception:
+                return None
+
+        def _flat(d, skip=()):
+            """[(k, v_str)] for the LangSmith-style attributes table."""
+            rows = []
+            for k, v in (d or {}).items():
+                if k in skip:
+                    continue
+                if isinstance(v, (dict, list)):
+                    v = json.dumps(v, ensure_ascii=False, default=str)
+                rows.append((k, str(v)))
+            return rows
+
+        params = _load(r["params_json"])
+        llm_meta = _load(r["meta_json"])
+        attr_groups = []
+        prow = _flat(params, skip=("_type",))
+        if prow:
+            attr_groups.append({"name": "调用参数", "rows": prow})
+        mrow = _flat(llm_meta, skip=("token_usage",))
+        if mrow:
+            attr_groups.append({"name": "返回元数据", "rows": mrow})
+        usage = (llm_meta or {}).get("token_usage")
+        if isinstance(usage, dict) and usage:
+            attr_groups.append({"name": "Token 用量",
+                                "rows": _flat(usage)})
+
         stream.append((r["seq"], 1, {
             "type": "llm", "name": r["model"], "ok": r["kind"] == "ok",
             "tokens": r["tokens"], "dur": r["dur"], "ts": ts,
+            "cost": _cost(r["model"], r["tokens"]),
+            "attr_groups": attr_groups,
             "off": off, "wid": wid,
             "cards": _msg_cards(r["request_json"]),
             "resp": _resp_card(r["response_json"]),
@@ -229,18 +326,26 @@ def _trace_tree(conn, run_id: str):
         # must never surface a negative duration to the user
         n["dur"] = max(0.0, ((nxt if nxt is not None else last) - n["ts"]))
         n["tokens"] = sum(c.get("tokens") or 0 for c in n["children"])
+        n["cost"] = sum(c.get("cost") or 0.0 for c in n["children"])
         n["slow"] = n["dur"] > 10.0
         n["off"], n["wid"] = _gantt(n["ts"], n["dur"])
     tokens = sum(n["tokens"] for n in nodes)
+    cost = sum(n["cost"] for n in nodes)
     started = (meta["started_at"] or "").replace("T", " ")
+    # run-level IO: first node's entry state is the graph input; the last
+    # captured node output is the graph output (LangSmith peek IO panel)
+    run_inputs = nodes[0]["inputs"] if nodes else None
+    run_outputs = next((n["outputs"] for n in reversed(nodes)
+                        if n["outputs"] is not None), None)
     return {"meta": meta, "nodes": nodes, "total": total, "tokens": tokens,
+            "cost": cost, "inputs": run_inputs, "outputs": run_outputs,
             "span": span, "slow": total > 30.0, "started": started}
 
 
 _DEFAULT_PRICES = {  # CNY / 1K tokens，混合粗估；~/.afr/prices.json 可覆盖
     "gpt-4o": 0.12, "gpt-4o-mini": 0.01, "gpt-4.1": 0.12,
     "qwen-max": 0.12, "qwen-plus": 0.02, "qwen-turbo": 0.005,
-    "deepseek-chat": 0.008, "claude-*": 0.18,
+    "qwen*": 0.02, "deepseek-chat": 0.008, "claude-*": 0.18,
 }
 
 
@@ -331,13 +436,14 @@ def create_app(db_path) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def traces_page(request: Request, status: str | None = None):
         rows = _run_rows(conn, status)
+        previews = _run_previews(conn, [r["id"] for r in rows])
         banner = conn.execute(
             "SELECT COUNT(*) c FROM (SELECT status FROM runs"
             " ORDER BY started_at DESC, id DESC LIMIT 50)"
             " WHERE status='failed'").fetchone()["c"]
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
             "runs": rows, "db": str(db_path), "status": status or "",
-            "banner_fails": banner,
+            "previews": previews, "banner_fails": banner,
         })
 
     @app.get("/stats", response_class=HTMLResponse)
@@ -355,8 +461,10 @@ def create_app(db_path) -> FastAPI:
     def run_page(request: Request, run_id: str):
         t = _trace_tree(conn, run_id)
         rows = _run_rows(conn)
+        previews = _run_previews(conn, [r["id"] for r in rows])
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
             "runs": rows, "db": str(db_path), "status": "",
+            "previews": previews,
             "selected": run_id, "tree": t,
         })
 

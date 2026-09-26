@@ -5,7 +5,7 @@
   <div class="empty">暂无录制。用 <code>afr.run(graph, inputs)</code> 代替
     <code>graph.invoke()</code> 开始录制。</div>
   {% else %}
-  <div class="list-head"><span></span><span>名称</span><span style="text-align:right">时间</span><span style="text-align:right">延迟</span><span style="text-align:right">token</span></div>
+  <div class="list-head"><span></span><span>名称</span><span style="text-align:right">时间</span><span style="text-align:right">延迟</span><span style="text-align:right">Token</span></div>
   {% endif %}
   {% for r in runs %}
   <div class="row {{ r['status'] }} {{ 'sel' if r['id'] == selected else '' }}"
@@ -22,10 +22,13 @@
       {{ r["label"] or r["id"] }}
       <span class="sub">#{{ r["id"] }}
         {%- if r["fork_of"] %} ↩ {{ r["fork_of"] }}{% endif %}</span>
+      {% set pv = previews.get(r['id'], {}) %}
+      {% if pv.get('inp') %}<span class="prev" title="输入：{{ pv['inp'] }}">⇥ {{ pv['inp'] }}</span>{% endif %}
+      {% if pv.get('out') %}<span class="prev out" title="输出：{{ pv['out'] }}">⇤ {{ pv['out'] }}</span>{% endif %}
     </span>
-    <span class="num sub">{{ (r["started_at"][11:19] if r["started_at"] else "-") }}</span>
-    <span class="num">{% if r["latency"] is none %}…{% elif r["latency"] < 1 %}{{ "%.0fms"|format(r["latency"] * 1000) }}{% else %}{{ "%.1fs"|format(r["latency"]) }}{% endif %}</span>
-    <span class="num">{{ "{:,}".format(r["tokens"]) if r["tokens"] else "—" }}</span>
+    <span class="num">{{ (r["started_at"][5:10] ~ " " ~ r["started_at"][11:16]) if r["started_at"] else "-" }}</span>
+    <span class="num {{ _lat_cls(r['latency']) }}">{% if r["latency"] is none %}…{% else %}<svg class="clk" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="currentColor"/><path d="M6 3.4V6l1.8 1.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>{% if r["latency"] < 1 %}{{ "%.0fms"|format(r["latency"] * 1000) }}{% else %}{{ "%.1fs"|format(r["latency"]) }}{% endif %}{% endif %}</span>
+    <span class="num">{{ _k(r["tokens"]) }}</span>
   </div>
   {% endfor %}
 </div>

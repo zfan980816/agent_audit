@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS events(
 CREATE TABLE IF NOT EXISTS llm_calls(
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, seq INTEGER, node TEXT,
   model TEXT, key_hash TEXT, request_json TEXT, response_json TEXT,
-  kind TEXT, tokens INTEGER, dur REAL);
+  kind TEXT, tokens INTEGER, dur REAL, params_json TEXT, meta_json TEXT);
 CREATE TABLE IF NOT EXISTS tool_calls(
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, seq INTEGER, node TEXT,
   tool_name TEXT, args_hash TEXT, args_json TEXT, result_json TEXT, kind TEXT);
@@ -63,6 +63,11 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
             conn.execute("ALTER TABLE llm_calls ADD COLUMN dur REAL")
         except sqlite3.OperationalError:
             pass
+        for col in ("params_json", "meta_json"):
+            try:  # migration: invocation params / response metadata
+                conn.execute(f"ALTER TABLE llm_calls ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass
     return conn
 
 
@@ -156,6 +161,10 @@ class Recorder(BaseCallbackHandler):
                 "node": self._node(metadata),
                 "t0": time.time(),
                 "request_json": canonical_json([m.model_dump() for m in batch]),
+                # invocation_params: temperature / max_tokens / stream ...
+                # (LangSmith Attributes > Invocation Params 区)
+                "params_json": canonical_json(
+                    kwargs.get("invocation_params") or {}),
             }
 
         self._safe(store)
@@ -174,15 +183,20 @@ class Recorder(BaseCallbackHandler):
                 tokens = int(usage.get("total_tokens", 0)) or None
             except Exception:
                 pass
+            # key stays model-only so replay lookup (same key recipe) matches;
+            # params_json is display data (Attributes), not part of the key
             params = canonical_json({"model": pend["model"]})
             key = llm_key(self.run_id, pend["model"], pend["request_json"], params)
             self.conn.execute(
                 "INSERT INTO llm_calls(run_id, seq, node, model, key_hash,"
-                " request_json, response_json, kind, tokens, dur)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                " request_json, response_json, kind, tokens, dur,"
+                " params_json, meta_json)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (self.run_id, self._next_seq(), pend["node"], pend["model"], key,
                  pend["request_json"], canonical_json(msg.model_dump()), "ok",
-                 tokens, max(0.0, time.time() - pend.get("t0", time.time()))),
+                 tokens, max(0.0, time.time() - pend.get("t0", time.time())),
+                 pend.get("params_json"),
+                 canonical_json(response.llm_output or {})),
             )
             self.conn.commit()
             self._event("llm", pend["node"], {"model": pend["model"], "kind": "ok"})
@@ -196,16 +210,18 @@ class Recorder(BaseCallbackHandler):
         def store():
             if pend is None:
                 return
+            # key stays model-only so replay lookup (same key recipe) matches;
+            # params_json is display data (Attributes), not part of the key
             params = canonical_json({"model": pend["model"]})
             key = llm_key(self.run_id, pend["model"], pend["request_json"], params)
             self.conn.execute(
                 "INSERT INTO llm_calls(run_id, seq, node, model, key_hash,"
-                " request_json, response_json, kind, tokens)"
-                " VALUES(?,?,?,?,?,?,?,?,?)",
+                " request_json, response_json, kind, tokens, params_json)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (self.run_id, self._next_seq(), pend["node"], pend["model"], key,
                  pend["request_json"],
                  canonical_json({"error": f"{error.__class__.__name__}: {error}"}),
-                 "error", None),
+                 "error", None, pend.get("params_json")),
             )
             self.conn.commit()
             self._event("llm", pend["node"], {"model": pend["model"], "kind": "error"})
