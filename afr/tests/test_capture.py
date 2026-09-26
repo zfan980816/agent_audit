@@ -183,3 +183,15 @@ def test_run_stream_records_failure_and_reraises(tmp_path):
         "SELECT status, error FROM runs WHERE label='stream-err'").fetchone()
     assert row[0] == "failed" and "search exploded" in row[1]
     conn.close()
+
+
+def test_setup_survives_viewer_startup_failure(monkeypatch):
+    """监控页起不来(缺依赖等)只能降级,不能拖死宿主应用的启动。"""
+    import afr.cli as cli
+    from afr import capture as cap
+
+    def boom(*a, **k):
+        raise RuntimeError("no jinja2")
+
+    monkeypatch.setattr(cli, "start_viewer", boom)
+    assert cap.setup(view=True) is None  # 吞掉并降级,不抛

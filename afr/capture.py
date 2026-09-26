@@ -310,8 +310,13 @@ def setup(db_url=None, *, view: bool = False, view_port: int = 7231):
     if db_url:
         db.configure(db_url)
     if view:
-        from .cli import start_viewer
-        return start_viewer(db_url, view_port)
+        try:
+            from .cli import start_viewer
+            return start_viewer(db_url, view_port)
+        except Exception as exc:  # 查看器起不来(缺 jinja2/uvicorn 等)只降级提示,
+            # 绝不能让宿主应用因为监控页起不来而启动失败
+            print(f"[afr] 内嵌监控页启动失败（录制不受影响）: {exc}", file=sys.stderr)
+            return None
     return None
 
 
