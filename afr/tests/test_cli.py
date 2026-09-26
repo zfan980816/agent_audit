@@ -27,7 +27,7 @@ def test_runs_list_page(tmp_path):
     _seed(db, [("fa", "failed", {"sources": []})])
     client = TestClient(create_app(db))
     r = client.get("/")
-    assert r.status_code == 200 and "#fa" in r.text and "✗" in r.text
+    assert r.status_code == 200 and "#fa" in r.text and 'title="失败"' in r.text
 
 
 def test_run_detail_page(tmp_path):

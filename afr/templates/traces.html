@@ -11,15 +11,21 @@
   <div class="row {{ r['status'] }} {{ 'sel' if r['id'] == selected else '' }}"
        hx-get="/run/{{ r['id'] }}/tree" hx-target="#detail"
        hx-push-url="/run/{{ r['id'] }}">
-    <span class="dot" title="{{ r['status'] }}"></span>
+    {% if r['status'] == 'ok' %}
+    <svg class="st" viewBox="0 0 16 16" title="成功"><circle cx="8" cy="8" r="7" fill="#ecfdf3" stroke="#46cd89"/><path d="M5.2 8.4l1.9 1.9 3.6-4.2" fill="none" stroke="#079455" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    {% elif r['status'] == 'failed' %}
+    <svg class="st" viewBox="0 0 16 16" title="失败"><circle cx="8" cy="8" r="7" fill="#fef3f2" stroke="#f04438"/><path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4" fill="none" stroke="#d92d20" stroke-width="1.6" stroke-linecap="round"/></svg>
+    {% else %}
+    <svg class="st" viewBox="0 0 16 16" title="执行中"><circle cx="8" cy="8" r="7" fill="#fffaeb" stroke="#fdb022"/><circle cx="8" cy="8" r="2.2" fill="#d97706"/></svg>
+    {% endif %}
     <span class="name">
       {{ r["label"] or r["id"] }}
-      <span class="sub">{{ "✗" if r["status"] == "failed" else ("…" if r["status"] == "replaying" else "✓") }}#{{ r["id"] }}
+      <span class="sub">#{{ r["id"] }}
         {%- if r["fork_of"] %} ↩ {{ r["fork_of"] }}{% endif %}</span>
     </span>
     <span class="num sub">{{ (r["started_at"][11:19] if r["started_at"] else "-") }}</span>
     <span class="num">{% if r["latency"] is none %}…{% elif r["latency"] < 1 %}{{ "%.0fms"|format(r["latency"] * 1000) }}{% else %}{{ "%.1fs"|format(r["latency"]) }}{% endif %}</span>
-    <span class="num">{{ r["tokens"] or "-" }}</span>
+    <span class="num">{{ "{:,}".format(r["tokens"]) if r["tokens"] else "—" }}</span>
   </div>
   {% endfor %}
 </div>

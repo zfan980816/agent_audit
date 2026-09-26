@@ -132,6 +132,33 @@ def _trace_tree(conn, run_id: str):
     events = conn.execute(
         "SELECT seq, ts, kind, node, payload FROM events WHERE run_id=?"
         " ORDER BY seq", (run_id,)).fetchall()
+    # calls and their 'llm'/'tool' events use interleaved seq values from the
+    # same counter, so pair them by order (1st llm_call <-> 1st llm event)
+    ev_ts = {"llm": [ev["ts"] for ev in events if ev["kind"] == "llm"],
+             "tool": [ev["ts"] for ev in events if ev["kind"] == "tool"]}
+    t0 = events[0]["ts"] if events else None
+    span = max(0.0, events[-1]["ts"] - events[0]["ts"]) if len(events) > 1 else 0.0
+    # wall latency from the runs table — same source as the list column,
+    # so the two numbers can never disagree. The gantt scale is the larger
+    # of the two so bars never overshoot the track and the honest gap
+    # between last event and wall time stays visible as empty track.
+    wall = None
+    if meta["finished_at"] and meta["started_at"]:
+        rw = conn.execute(
+            "SELECT CAST((julianday(finished_at)-julianday(started_at))"
+            "*86400 AS REAL) l FROM runs WHERE id=?", (run_id,)).fetchone()
+        wall = rw["l"] if rw else None
+    total = wall if wall is not None else span
+    gantt_total = max(total or 0.0, span)
+
+    def _gantt(ts, dur):
+        """(offset%, width%) on the gantt timeline; None = no bar."""
+        if ts is None or t0 is None or gantt_total <= 0:
+            return None, (0.0 if dur else None)
+        off = min(100.0, max(0.0, (ts - t0) / gantt_total * 100.0))
+        wid = (min(100.0 - off, max(0.0, dur / gantt_total * 100.0))
+               if dur else None)
+        return round(off, 1), (round(wid, 1) if wid is not None else None)
 
     stream = []
     for ev in events:
@@ -149,22 +176,35 @@ def _trace_tree(conn, run_id: str):
             except Exception:
                 out = ev["payload"]
             stream.append((ev["seq"], 2, {"node_output": out}))
-    for r in conn.execute(
-            "SELECT seq, node, model, kind, request_json, response_json,"
-            " tokens, dur FROM llm_calls WHERE run_id=?", (run_id,)):
+    llm_rows = conn.execute(
+        "SELECT seq, node, model, kind, request_json, response_json,"
+        " tokens, dur FROM llm_calls WHERE run_id=? ORDER BY seq",
+        (run_id,)).fetchall()
+    for i, r in enumerate(llm_rows):
+        # the llm event fires in on_llm_end, so its ts is the END of the
+        # call; subtract dur to get the true bar start
+        ts = ev_ts["llm"][i] if i < len(ev_ts["llm"]) else None
+        if ts is not None and r["dur"]:
+            ts = ts - r["dur"]
+        off, wid = _gantt(ts, r["dur"])
         stream.append((r["seq"], 1, {
             "type": "llm", "name": r["model"], "ok": r["kind"] == "ok",
-            "tokens": r["tokens"], "dur": r["dur"],
+            "tokens": r["tokens"], "dur": r["dur"], "ts": ts,
+            "off": off, "wid": wid,
             "cards": _msg_cards(r["request_json"]),
             "resp": _resp_card(r["response_json"]),
             "raw": _pretty(r["request_json"]) + "\n→\n"
                 + _pretty(r["response_json"])}))
-    for r in conn.execute(
-            "SELECT seq, node, tool_name, kind, args_json, result_json"
-            " FROM tool_calls WHERE run_id=?", (run_id,)):
+    tool_rows = conn.execute(
+        "SELECT seq, node, tool_name, kind, args_json, result_json"
+        " FROM tool_calls WHERE run_id=? ORDER BY seq", (run_id,)).fetchall()
+    for i, r in enumerate(tool_rows):
+        ts = ev_ts["tool"][i] if i < len(ev_ts["tool"]) else None
+        off, wid = _gantt(ts, None)
         stream.append((r["seq"], 1, {
             "type": "tool", "name": r["tool_name"], "ok": r["kind"] == "ok",
-            "tokens": None, "dur": None,
+            "tokens": None, "dur": None, "ts": ts,
+            "off": off, "wid": wid,
             "tc": _tool_cards(r["args_json"], r["result_json"],
                               r["tool_name"])}))
     stream.sort(key=lambda x: (x[0], x[1]))
@@ -190,16 +230,7 @@ def _trace_tree(conn, run_id: str):
         n["dur"] = max(0.0, ((nxt if nxt is not None else last) - n["ts"]))
         n["tokens"] = sum(c.get("tokens") or 0 for c in n["children"])
         n["slow"] = n["dur"] > 10.0
-    span = max(0.0, events[-1]["ts"] - events[0]["ts"]) if len(events) > 1 else 0.0
-    # wall latency from the runs table — same source as the list column,
-    # so the two numbers can never disagree
-    wall = None
-    if meta["finished_at"] and meta["started_at"]:
-        r = conn.execute(
-            "SELECT CAST((julianday(finished_at)-julianday(started_at))"
-            "*86400 AS REAL) l FROM runs WHERE id=?", (run_id,)).fetchone()
-        wall = r["l"] if r else None
-    total = wall if wall is not None else span
+        n["off"], n["wid"] = _gantt(n["ts"], n["dur"])
     tokens = sum(n["tokens"] for n in nodes)
     started = (meta["started_at"] or "").replace("T", " ")
     return {"meta": meta, "nodes": nodes, "total": total, "tokens": tokens,

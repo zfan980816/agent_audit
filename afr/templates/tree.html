@@ -1,86 +1,131 @@
-{# 右栏：一次执行的 span 树 + 消息回放（仿 LangSmith Trace 详情） #}
+{# 右栏：一次执行的瀑布时间轴 + 可展开的消息回放（仿 LangSmith Trace 详情） #}
 {% if not t %}
 <div class="empty">run 不存在</div>
 {% else %}
 <div class="detail-title">
   <span class="t">{{ t.meta["label"] or "#" ~ t.meta["id"] }}</span>
-  <span class="badge {{ t.meta["status"] }}">{{ t.meta["status"] }}</span>
+  <span class="badge {{ t.meta['status'] }}">{{ t.meta["status"] }}</span>
 </div>
 <div class="meta-chips">
   <span class="chip">#{{ t.meta["id"] }}{% if t.meta["fork_of"] %} · fork of {{ t.meta["fork_of"] }}{% endif %}</span>
   <span class="chip">开始 <b>{{ t.started or "-" }}</b></span>
   <span class="chip"{% if t.slow %} title="超过 30s 阈值"{% endif %}>总时长 <b class="{{ 'slow-red' if t.slow }}">{{ "%.1f"|format(t.total) if t.total is not none else "-" }}s</b></span>
-  <span class="chip">token <b>{{ "{:,}".format(t.tokens) if t.tokens else "—" }}</b></span>
+  <span class="chip">Token <b>{{ "{:,}".format(t.tokens) if t.tokens else "—" }}</b></span>
   <span class="chip">节点 <b>{{ t.nodes|length }}</b></span>
 </div>
 {% if t.meta["error"] %}<div class="errbox">{{ t.meta["error"] }}</div>{% endif %}
 
-{% for n in t.nodes %}
-<div class="tree-row">
-  <div class="tree-head">
-    <span class="tag node">NODE</span><span class="nm">{{ n.node }}</span>
-    <span class="wf" title="{{ "%.2f"|format(n.dur) }}s"><span class="bar {{ 'err' if n.slow }}" style="{% if n.dur %}width: {{ ((n.dur / t.total * 100) if t.total else 0)|round(1) }}%{% else %}width:0;min-width:0{% endif %}"></span></span>
-    <span class="dur {{ 'slow-red' if n.slow }}"{% if n.slow %} title="超过 10s"{% endif %}>{% if n.dur is none %}—{% elif n.dur < 1 %}{{ "%.0fms"|format(n.dur * 1000) }}{% else %}{{ "%.1fs"|format(n.dur) }}{% endif %}</span>
-    {% if n.tokens %}<span class="tokchip">{{ "{:,}".format(n.tokens) }} tok</span>{% endif %}
+{% if t.nodes %}
+<div class="panel">
+  <div class="wf-head">
+    <span>名称</span>
+    <span class="c">时长</span>
+    <span class="c">token</span>
+    <span class="c track-h">时间轴{% if t.total %} · 共 {{ "%.1f"|format(t.total) }}s{% endif %}</span>
   </div>
-  <details style="padding:4px 12px">
-    <summary>节点入口状态（= 上一节点输出）</summary>
-    <pre>{% if n.inputs is string %}{{ n.inputs }}{% else %}{{ n.inputs|tojson }}{% endif %}</pre>
-  </details>
-  {% for c in n.children %}
-  {% if c.type == "llm" %}
-  <details class="child">
-    <summary>
-      <span class="tag llm">LLM</span> {{ c.name }}
-      {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
-      {% if c.dur is not none %}<span style="color:var(--n-500);font-size:11.5px;font-variant-numeric:tabular-nums">{% if c.dur < 1 %}{{ "%.0fms"|format(c.dur * 1000) }}{% else %}{{ "%.1fs"|format(c.dur) }}{% endif %}</span>{% endif %}
-      {% if c.tokens %}<span class="tokchip">{{ "{:,}".format(c.tokens) }} tok</span>{% endif %}
+
+  {% for n in t.nodes %}
+  <details class="wf-row" open>
+    <summary class="wf-line" title="{{ n.node }}">
+      <span class="wf-name">
+        <span class="caret"></span><span class="ic ic-node">▦</span><span class="nm">{{ n.node }}</span>
+      </span>
+      <span class="wf-lat {{ 'slow-red' if n.slow }}"{% if n.slow %} title="超过 10s"{% endif %}>{% if n.dur is none %}—{% elif n.dur < 1 %}{{ "%.0fms"|format(n.dur * 1000) }}{% else %}{{ "%.1fs"|format(n.dur) }}{% endif %}</span>
+      <span class="wf-tok">{{ "{:,}".format(n.tokens) if n.tokens else "—" }}</span>
+      <span class="track" title="{{ "%.2f"|format(n.dur) }}s @ +{{ "%.2f"|format((n.off or 0) * (t.total or 0) / 100) }}s">
+        <span class="bar {{ 'err' if n.slow }}" style="{% if n.wid is not none %}left: {{ n.off }}%; width: {{ n.wid }}%{% else %}display:none{% endif %}"></span>
+      </span>
     </summary>
-    <div class="cards">
-      {% for m in c.cards %}
-      <div class="msgcard {{ 'tool' if m.role == '工具结果' else ('ai' if m.role == 'AI' else 'user') }}">
-        <div class="mc-head">{{ m.role }}</div>
-        <div class="mc-body">{{ m.content[:500] }}{% if m.content|length > 500 %}…{% endif %}</div>
-      </div>
-      {% endfor %}
-      {% if c.resp %}
-      <div class="msgcard ai {{ 'err' if c.resp.err }}">
-        <div class="mc-head">{{ c.resp.role }}{% if c.resp.err %} · error{% endif %}</div>
-        {% if c.resp.tool %}
-        <div class="mc-tool">
-          <span class="tag tool">⚙ {{ c.resp.tool.name }}</span>
-          <pre class="kv">{{ c.resp.tool.args }}</pre>
-        </div>
-        {% endif %}
-        <div class="mc-body">{{ c.resp.content[:800] }}{% if c.resp.content|length > 800 %}…{% endif %}</div>
-      </div>
+
+    <div class="wf-detail">
+      {% if n.inputs is not none %}
+      <details>
+        <summary>节点入口状态（= 上一节点输出）</summary>
+        <pre>{% if n.inputs is string %}{{ n.inputs }}{% else %}{{ n.inputs|tojson }}{% endif %}</pre>
+      </details>
       {% endif %}
+      {% if n.outputs is not none %}
+      <details>
+        <summary>节点输出</summary>
+        <pre>{% if n.outputs is string %}{{ n.outputs }}{% else %}{{ n.outputs|tojson }}{% endif %}</pre>
+      </details>
+      {% endif %}
+      {% if n.inputs is none and n.outputs is none %}<span class="sub-note">无捕获的状态快照</span>{% endif %}
     </div>
-    <details style="margin-top:4px"><summary>原始 JSON</summary>
-      <pre>{{ c.raw }}</pre></details>
-  </details>
-  {% else %}
-  <details class="child">
-    <summary>
-      <span class="tag tool">TOOL</span> {{ c.name }}
-      {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
-    </summary>
-    <div class="cards">
-      <div class="msgcard tool">
-        <div class="mc-head">调用参数</div>
-        <pre class="kv">{% if c.tc.args is string %}{{ c.tc.args }}{% else %}{{ c.tc.args|tojson }}{% endif %}</pre>
-      </div>
-      <div class="msgcard user">
-        <div class="mc-head">返回结果</div>
-        <div class="mc-body">{{ c.tc.result }}</div>
-      </div>
+
+    {% if n.children %}
+    <div class="wf-kids">
+      {% for c in n.children %}
+      {% if c.type == "llm" %}
+      <details class="wf-row sub">
+        <summary class="wf-line" title="{{ c.name }}">
+          <span class="wf-name">
+            <span class="caret"></span><span class="ic ic-llm">✦</span><span class="nm">{{ c.name }}</span>
+            {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
+          </span>
+          <span class="wf-lat">{% if c.dur is none %}—{% elif c.dur < 1 %}{{ "%.0fms"|format(c.dur * 1000) }}{% else %}{{ "%.1fs"|format(c.dur) }}{% endif %}</span>
+          <span class="wf-tok">{{ "{:,}".format(c.tokens) if c.tokens else "—" }}</span>
+          <span class="track" title="{{ c.name }}">
+            <span class="bar bar-llm" style="{% if c.wid is not none %}left: {{ c.off }}%; width: {{ c.wid }}%{% else %}display:none{% endif %}"></span>
+          </span>
+        </summary>
+        <div class="wf-detail">
+          <div class="cards">
+            {% for m in c.cards %}
+            <div class="msgcard {{ 'tool' if m.role == '工具结果' else ('ai' if m.role == 'AI' else 'user') }}">
+              <div class="mc-head">{{ m.role }}</div>
+              <div class="mc-body">{{ m.content[:500] }}{% if m.content|length > 500 %}…{% endif %}</div>
+            </div>
+            {% endfor %}
+            {% if c.resp %}
+            <div class="msgcard ai {{ 'err' if c.resp.err }}">
+              <div class="mc-head">{{ c.resp.role }}{% if c.resp.err %} · error{% endif %}</div>
+              {% if c.resp.tool %}
+              <div class="mc-tool">
+                <span class="tag tool">⚙ {{ c.resp.tool.name }}</span>
+                <pre class="kv">{{ c.resp.tool.args }}</pre>
+              </div>
+              {% endif %}
+              <div class="mc-body">{{ c.resp.content[:800] }}{% if c.resp.content|length > 800 %}…{% endif %}</div>
+            </div>
+            {% endif %}
+          </div>
+          <details><summary>原始 JSON</summary>
+            <pre>{{ c.raw }}</pre></details>
+        </div>
+      </details>
+      {% else %}
+      <details class="wf-row sub">
+        <summary class="wf-line" title="{{ c.name }}">
+          <span class="wf-name">
+            <span class="caret"></span><span class="ic ic-tool">🔧</span><span class="nm">{{ c.name }}</span>
+            {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
+          </span>
+          <span class="wf-lat">—</span>
+          <span class="wf-tok">—</span>
+          <span class="track"></span>
+        </summary>
+        <div class="wf-detail">
+          <div class="cards">
+            <div class="msgcard tool">
+              <div class="mc-head">调用参数</div>
+              <pre class="kv">{% if c.tc.args is string %}{{ c.tc.args }}{% else %}{{ c.tc.args|tojson }}{% endif %}</pre>
+            </div>
+            <div class="msgcard user">
+              <div class="mc-head">返回结果</div>
+              <div class="mc-body">{{ c.tc.result }}</div>
+            </div>
+          </div>
+        </div>
+      </details>
+      {% endif %}
+      {% endfor %}
     </div>
+    {% endif %}
   </details>
-  {% endif %}
   {% endfor %}
-  {% if not n.children %}<div class="child" style="color:#8a94a0">（无 LLM/工具调用）</div>{% endif %}
 </div>
 {% else %}
 <div class="empty">该执行无 node 级事件（非 LangGraph 流程）</div>
-{% endfor %}
+{% endif %}
 {% endif %}

@@ -6,10 +6,11 @@
 <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  /* ===== 设计令牌：提取自 LangSmith 官方 CSS（smith.langchain.com 资产包，
-         浅色主题），2026-09-25。单价级对齐：主蓝/绿/灰阶/圆角/阴影均为原值 ===== */
+  /* ===== 设计令牌：提取自 LangSmith 官方 CSS（apac.smith.langchain.com
+         资产包 index-D5_KzS3r.css，浅色主题），2026-09-26。色板/圆角/阴影
+         逐项对齐原值；等宽字体原站用 Fira Code ===== */
   :root {
     --brand-25: #e5f4ff;  --brand-50: #cce9ff;  --brand-200: #145095;
     --brand-400: #006ddd; --brand-500: #1566b8; --brand-600: #145095;
@@ -17,23 +18,26 @@
     --green-500: #46cd89; --green-600: #079455;
     --red-25: #fef3f2;    --red-100: #fee4e2;   --red-600: #d92d20;
     --yellow-50: #fffaeb; --yellow-600: #d97706;
-    --purple-50: #f4f3ff; --purple-600: #6941c6;
+    --orange-500: #f79009;
+    --purple-50: #f4f3ff; --purple-500: #8b71cc; --purple-600: #6244a0;
     --n-25: #fafbfd; --n-35: #f8fafc; --n-50: #f5f8fb; --n-100: #edf2f7;
     --n-200: #e2e8f0; --n-300: #cbd5e1; --n-400: #94a3b8; --n-500: #64748b;
-    --n-700: #334155; --n-900: #101828;
+    --n-600: #475569; --n-700: #334155; --n-800: #1e293b; --n-900: #0f172a;
     --r-xs: 3px; --r-sm: 4px; --r-md: 6px; --r-lg: 8px; --r-xl: 12px;
     --shadow-sm: 0 1px 3px #1018281a, 0 1px 2px #1018280f;
     --shadow-md: 0 4px 6px -1px #1018281a, 0 2px 4px -1px #1018280f;
     --font-ui: Inter, "Noto Sans SC", -apple-system, "Segoe UI",
                "PingFang SC", "Microsoft YaHei", sans-serif;
-    --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, Consolas,
-                 monospace;
+    --font-mono: "Fira Code", ui-monospace, Consolas, monospace;
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; }
   body { font-family: var(--font-ui); background: var(--n-35);
          color: var(--n-900); font-size: 13px; line-height: 1.45;
-         display: flex; flex-direction: column; }
+         display: flex; flex-direction: column;
+         -webkit-font-smoothing: antialiased; }
+  .num, .wf-lat, .wf-tok, .chip { font-variant-numeric: tabular-nums;
+           font-feature-settings: "tnum" 1; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb { background: var(--n-300); border-radius: 4px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--n-400); }
@@ -69,11 +73,7 @@
   .row:hover { background: var(--n-50); }
   .row.sel { background: var(--brand-50);
              box-shadow: inset 3px 0 0 var(--brand-500); }
-  .dot { width: 8px; height: 8px; border-radius: 9999px; }
-  .ok .dot { background: var(--green-500); box-shadow: 0 0 0 3px var(--green-50); }
-  .failed .dot { background: var(--red-600); box-shadow: 0 0 0 3px var(--red-25); }
-  .replaying .dot { background: var(--yellow-600);
-                    box-shadow: 0 0 0 3px var(--yellow-50); }
+  .st { width: 16px; height: 16px; }
   .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                font-weight: 500; }
   .row .sub { color: var(--n-400); font-size: 11px; font-weight: 400;
@@ -86,10 +86,14 @@
 
   /* 徽章 / 芯片 */
   .badge { display: inline-flex; align-items: center; font-size: 11px;
-           font-weight: 600; padding: 1px 8px; border-radius: var(--r-sm); }
-  .badge.ok { background: var(--green-50); color: var(--green-600); }
-  .badge.failed { background: var(--red-25); color: var(--red-600); }
-  .badge.replaying { background: var(--yellow-50); color: var(--yellow-600); }
+           font-weight: 600; padding: 1px 8px; border-radius: var(--r-sm);
+           border: 1px solid transparent; line-height: 16px; }
+  .badge.ok { background: var(--green-50); color: var(--green-600);
+              border-color: #b9e6ca; }
+  .badge.failed { background: var(--red-25); color: var(--red-600);
+                  border-color: #fbd5d2; }
+  .badge.replaying { background: var(--yellow-50); color: var(--yellow-600);
+                     border-color: #fedf89; }
   .tokchip { font-size: 11px; color: var(--n-500); background: var(--n-100);
              border-radius: 9999px; padding: 1px 8px;
              font-variant-numeric: tabular-nums; }
@@ -100,35 +104,76 @@
   .tag.tool { background: var(--purple-50); color: var(--purple-600); }
   .tag.node { background: var(--brand-25); color: var(--brand-600); }
 
-  /* 树 */
-  .tree-row { border: 1px solid var(--n-200); border-radius: var(--r-lg);
-              margin: 8px 0; background: #fff; box-shadow: var(--shadow-sm); }
-  .tree-head { display: flex; align-items: center; gap: 10px; padding: 7px 12px;
-               background: var(--n-25); border-bottom: 1px solid var(--n-100);
-               border-radius: var(--r-lg) var(--r-lg) 0 0; }
-  .tree-head .nm { font-weight: 600; font-size: 12.5px; }
-  .tree-head .dur { color: var(--n-500); font-size: 12px; margin-left: auto;
+  /* 瀑布时间轴（仿 LangSmith trace waterfall：平铺行 + 全宽轨道 + 起点定位） */
+  .panel { background: #fff; border: 1px solid var(--n-200);
+           border-radius: var(--r-lg); box-shadow: var(--shadow-sm);
+           overflow: hidden; }
+  .wf-head { display: grid;
+             grid-template-columns: minmax(0,1fr) 64px 64px minmax(160px,32%);
+             gap: 10px; padding: 7px 14px; background: var(--n-25);
+             border-bottom: 1px solid var(--n-200); font-size: 11px;
+             font-weight: 600; color: var(--n-500); letter-spacing: .02em; }
+  .wf-head .c { text-align: right; }
+  .wf-head .track-h { text-align: left; }
+  .wf-row { border-bottom: 1px solid var(--n-100); }
+  .wf-row:last-child { border-bottom: none; }
+  .wf-row > summary { list-style: none; }
+  .wf-row > summary::-webkit-details-marker { display: none; }
+  .wf-line { display: grid;
+             grid-template-columns: minmax(0,1fr) 64px 64px minmax(160px,32%);
+             gap: 10px; align-items: center; padding: 7px 14px;
+             cursor: pointer; transition: background .1s; }
+  .wf-line:hover { background: var(--n-50); }
+  .wf-row.sub .wf-line { padding-top: 5px; padding-bottom: 5px; }
+  .wf-name { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .wf-name .nm { overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; font-weight: 500; font-size: 12.5px; }
+  .wf-row.sub .nm { font-weight: 400; color: var(--n-700); }
+  .caret { flex: none; width: 0; height: 0;
+           border-left: 5px solid var(--n-400);
+           border-top: 4px solid transparent;
+           border-bottom: 4px solid transparent;
+           transition: transform .12s; }
+  .wf-row[open] > summary .caret { transform: rotate(90deg); }
+  .ic { flex: none; width: 18px; height: 18px; border-radius: var(--r-sm);
+        color: #fff; font-size: 11px; line-height: 1;
+        display: inline-flex; align-items: center; justify-content: center; }
+  .ic-node { background: var(--brand-500); }
+  .ic-llm { background: var(--purple-600); font-size: 10px; }
+  .ic-tool { background: var(--orange-500); font-size: 10px; }
+  .wf-lat, .wf-tok { text-align: right; color: var(--n-500); font-size: 12px;
                     font-variant-numeric: tabular-nums; }
-  .wf { flex: 1; max-width: 220px; height: 6px; background: var(--n-100);
-        border-radius: 3px; overflow: hidden; }
-  .bar { height: 100%; background: var(--brand-500); border-radius: 3px;
-         min-width: 2px; opacity: .85; }
+  .wf-tok { color: var(--n-400); }
+  .track { position: relative; height: 14px; overflow: hidden;
+           background-image:
+             linear-gradient(90deg, transparent calc(25% - 1px),
+               #f1f5f9 calc(25% - 1px), #f1f5f9 25%, transparent 25%),
+             linear-gradient(90deg, transparent calc(50% - 1px),
+               #f1f5f9 calc(50% - 1px), #f1f5f9 50%, transparent 50%),
+             linear-gradient(90deg, transparent calc(75% - 1px),
+               #f1f5f9 calc(75% - 1px), #f1f5f9 75%, transparent 75%); }
+  .bar { position: absolute; top: 3px; height: 8px;
+         min-width: 3px; background: var(--brand-500); border-radius: 2px;
+         transition: background .1s; }
+  .wf-line:hover .bar { background: var(--brand-600); }
   .bar.err { background: var(--red-600); }
+  .bar-llm { background: var(--purple-500); }
+  .wf-line:hover .bar-llm { background: var(--purple-600); }
+  .wf-kids { margin-left: 20px; border-left: 1px solid var(--n-200); }
+  .wf-detail { padding: 6px 14px 10px 34px; background: var(--n-25);
+               border-top: 1px solid var(--n-100); }
+  .wf-row.sub .wf-detail { padding-left: 30px; }
+  .sub-note { color: var(--n-400); font-size: 12px; }
   /* 详情头部 */
   .detail-title { display: flex; align-items: center; gap: 10px;
                   margin-bottom: 6px; }
   .detail-title .t { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
-  .meta-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-  .chip { display: inline-flex; align-items: center; gap: 4px;
-          background: #fff; border: 1px solid var(--n-200);
-          border-radius: 9999px; padding: 2px 10px; font-size: 11.5px;
-          color: var(--n-700); font-variant-numeric: tabular-nums; }
-  .chip b { color: var(--n-900); font-weight: 600; }
-  .child { padding: 5px 12px 5px 26px; border-bottom: 1px solid var(--n-50);
-           position: relative; }
-  .child::before { content: ""; position: absolute; left: 12px; top: 0;
-                   bottom: 0; width: 1px; background: var(--n-200); }
-  .child:last-child { border-bottom: none; }
+  .meta-chips { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px;
+          font-size: 12px; color: var(--n-500);
+          font-variant-numeric: tabular-nums; }
+  .chip b { color: var(--n-900); font-weight: 600; font-family: var(--font-mono);
+            font-size: 11.5px; }
 
   /* 消息卡片 */
   .cards { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
