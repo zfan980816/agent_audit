@@ -322,6 +322,38 @@ def _trace_tree(conn, run_id: str):
             break
         if first_error:
             break
+
+    def _pv(obj, prefix="", limit=46):
+        """One-line Input/Output/Error cell preview (LangSmith trace table)."""
+        try:
+            s = obj if isinstance(obj, str) else json.dumps(
+                obj, ensure_ascii=False, default=str)
+        except Exception:
+            s = str(obj)
+        s = prefix + " ".join(s.split())
+        return s[:limit] + ("…" if len(s) > limit else "")
+
+    for n in nodes:
+        n["inp"] = _pv(n["inputs"]) if n["inputs"] is not None else None
+        n["out"] = _pv(n["outputs"]) if n["outputs"] is not None else None
+        n["err"] = (_pv(first_error["msg"], limit=40)
+                    if first_error and first_error["node"] == n["node"]
+                    and first_error.get("msg") else None)
+        for c in n["children"]:
+            if c["type"] == "llm":
+                human = next((m for m in c["cards"]
+                              if m["role"] in ("用户", "系统")), None)
+                c["inp"] = (_pv(human["content"], human["role"] + ": ")
+                            if human else None)
+                if (c.get("resp") or {}).get("content"):
+                    c["out"] = _pv(c["resp"]["content"], c["resp"]["role"] + ": ")
+                c["err"] = _pv(c["resp"]["content"], limit=40) \
+                    if not c["ok"] and (c.get("resp") or {}).get("err") else None
+            else:
+                c["inp"] = _pv((c.get("tc") or {}).get("args"))
+                res = (c.get("tc") or {}).get("result")
+                c["out"] = _pv(res) if res else None
+                c["err"] = _pv(res, limit=40) if not c["ok"] and res else None
     # best diff counterpart: latest same-label run of the OPPOSITE status,
     # falling back to any latest same-label run (LangSmith has no such
     # one-click jump — this is our first-divergence workflow's front door)

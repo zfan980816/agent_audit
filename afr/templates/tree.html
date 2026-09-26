@@ -50,6 +50,9 @@
 <div class="panel">
   <div class="wf-head">
     <span>名称</span>
+    <span>Input</span>
+    <span>Output</span>
+    <span>Error</span>
     <span class="c">开始</span>
     <span class="c">时长</span>
     <span class="c">Token</span>
@@ -63,6 +66,9 @@
       <span class="wf-name">
         <span class="caret"></span><span class="ic ic-node">▦</span><span class="nm">{{ n.node }}</span>
       </span>
+      <span class="pv" {% if n.inp %}title="{{ n.inp }}"{% endif %}>{{ n.inp or "—" }}</span>
+      <span class="pv" {% if n.out %}title="{{ n.out }}"{% endif %}>{{ n.out or "—" }}</span>
+      <span class="pv {{ 'err' if n.err }}" {% if n.err %}title="{{ n.err }}"{% endif %}>{{ n.err or "—" }}</span>
       <span class="wf-start">+{{ "%.1f"|format((n.off or 0) / 100 * (t.total or 0)) }}s</span>
       <span class="wf-lat {{ _lat_cls(n.dur) }}"{% if n.dur and n.dur >= 10 %} title="{% if n.dur < 60 %}超过 10s{% else %}超过 60s{% endif %}"{% endif %}>{{ durfmt(n.dur) }}</span>
       <span class="wf-tok">{{ _k(n.tokens) }}</span>
@@ -98,6 +104,9 @@
             <span class="caret"></span><span class="ic ic-llm">✦</span><span class="nm">{{ c.name }}</span>
             {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
           </span>
+          <span class="pv" {% if c.inp %}title="{{ c.inp }}"{% endif %}>{{ c.inp or "—" }}</span>
+          <span class="pv" {% if c.out %}title="{{ c.out }}"{% endif %}>{{ c.out or "—" }}</span>
+          <span class="pv {{ 'err' if c.err }}" {% if c.err %}title="{{ c.err }}"{% endif %}>{{ c.err or "—" }}</span>
           <span class="wf-start">+{{ "%.1f"|format((c.off or 0) / 100 * (t.total or 0)) }}s</span>
           <span class="wf-lat {{ _lat_cls(c.dur) }}">{{ durfmt(c.dur) }}</span>
           <span class="wf-tok">{{ _k(c.tokens) }}</span>
@@ -150,6 +159,9 @@
             <span class="caret"></span><span class="ic ic-tool">🔧</span><span class="nm">{{ c.name }}</span>
             {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
           </span>
+          <span class="pv" {% if c.inp %}title="{{ c.inp }}"{% endif %}>{{ c.inp or "—" }}</span>
+          <span class="pv" {% if c.out %}title="{{ c.out }}"{% endif %}>{{ c.out or "—" }}</span>
+          <span class="pv {{ 'err' if c.err }}" {% if c.err %}title="{{ c.err }}"{% endif %}>{{ c.err or "—" }}</span>
           <span class="wf-start">—</span>
           <span class="wf-lat">—</span>
           <span class="wf-tok">—</span>
