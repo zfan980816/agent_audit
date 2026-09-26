@@ -241,8 +241,9 @@ def test_nested_react_agent_stays_out_of_timeline(tmp_path):
 
     model = _ToolFake(responses=[
         AIMessage("", tool_calls=[{"name": "lookup", "args": {"q": "x"},
-                                   "id": "c1"}]),
-        AIMessage("done"),
+                                   "id": "c1"}],
+                  response_metadata={"model_name": "fake-glm"}),
+        AIMessage("done", response_metadata={"model_name": "fake-glm"}),
     ])
     agent = create_react_agent(model, tools=[lookup])
 
@@ -273,6 +274,8 @@ def test_nested_react_agent_stays_out_of_timeline(tmp_path):
     assert conn.execute(  # 1 次工具调用归属外层节点
         "SELECT COUNT(*) FROM tool_calls WHERE node='transport'"
     ).fetchone()[0] == 1
+    assert [r[0] for r in conn.execute(  # 真实型号优先于序列化类名
+            "SELECT DISTINCT model FROM llm_calls")] == ["fake-glm"]
     conn.close()
 
 

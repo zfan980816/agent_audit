@@ -188,6 +188,13 @@ class Recorder(BaseCallbackHandler):
             if pend is None:
                 return
             msg = response.generations[0][0].message
+            # 真实型号优先:OpenAI 兼容接口在 message.response_metadata 带回
+            # model_name/model(glm-4.5 等);序列化类名(ChatOpenAI/FakeXxx)
+            # 只做兜底——8 行全叫 ChatOpenAI 的瀑布图没法看
+            rmeta = getattr(msg, "response_metadata", None) or {}
+            real = rmeta.get("model_name") or rmeta.get("model")
+            if real:
+                pend["model"] = str(real)
             tokens = None
             try:
                 usage = (response.llm_output or {}).get("token_usage") or {}
