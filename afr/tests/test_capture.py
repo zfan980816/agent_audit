@@ -1,4 +1,5 @@
 """T6 — capture tests: event recording, A5 exception isolation, failures."""
+import time
 
 import sqlite3
 import threading
@@ -128,10 +129,21 @@ def test_concurrent_runs_both_recorded(tmp_path, monkeypatch):
     for t in threads:
         t.join()
     assert not errs and len(results) == 4
-    afr_db.flush_buffer_best_effort(db)  # 把撞锁溢写的部分灌回再计数
+    backlog = 1
+    for _ in range(40):  # 排空也可能撞锁,有界重试(生产由 flusher 线程兜底)
+        backlog = afr_db.flush_buffer_best_effort(db)
+        if not backlog:
+            break
+        time.sleep(0.25)
     conn = sqlite3.connect(db)
-    assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 4
+    got = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
     conn.close()
+    buf_state = ""
+    if backlog or got != 4:  # 失败现场:数据是还在缓冲,还是真丢了
+        buf = sqlite3.connect(afr_db.BUFFER_DB)
+        buf_state = f"; buffer runs={buf.execute('SELECT COUNT(*) FROM runs').fetchone()[0]}"
+        buf.close()
+    assert got == 4, f"主库 {got}/4, 缓冲积压 {backlog}{buf_state}"
 
 
 def test_run_stream_records_langgraph_astream(tmp_path):

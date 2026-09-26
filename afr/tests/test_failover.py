@@ -251,3 +251,20 @@ def test_buffer_flush_is_routed_to_its_own_db(tmp_path, monkeypatch):
     buf = db.open_buffer()
     assert buf.execute("SELECT COUNT(*) c FROM runs").fetchone()["c"] == 0
     buf.close()
+
+
+def test_flush_buffer_accepts_bare_path(tmp_path, monkeypatch):
+    """flush_buffer 的 db_url 参数没归一化时,裸 Path 绑定参数会抛异常且被
+    best_effort 吞掉——排空循环看起来在跑,实际一次都没执行过。"""
+    monkeypatch.setattr(db, "BUFFER_DB", tmp_path / "buffer.db")
+    primary_path = tmp_path / "p.db"
+    url = _url(primary_path)
+    buf = db.open_buffer()
+    buf.execute("INSERT INTO runs(id, label, status, started_at, db_url)"
+                " VALUES(?,?,?,?,?)", ("rid20", "L", "ok", url, url))
+    buf.commit()
+    buf.close()
+    assert db.flush_buffer(primary_path) == 1  # 裸 Path,不是字符串
+    buf = db.open_buffer()
+    assert buf.execute("SELECT COUNT(*) c FROM runs").fetchone()["c"] == 0
+    buf.close()

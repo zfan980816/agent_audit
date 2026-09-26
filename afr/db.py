@@ -462,6 +462,7 @@ def flush_buffer(db_url: str) -> int:
     """
     if not BUFFER_DB.exists():
         return 0
+    db_url = _coerce(db_url)  # bare Path (historical shorthand) -> sqlite:///…
     buf = open_buffer()
     try:
         # Only this db's runs (NULL/'' = rows spilled by older versions,
