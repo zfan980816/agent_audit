@@ -83,6 +83,12 @@ class Recorder(BaseCallbackHandler):
         # puts langgraph_node in on_chain_start's metadata; chain ends and
         # llm/tool children must be attributed through their parent run)
         self._run_node: dict[str, str] = {}
+        # checkpoint namespaces of node chains we already recorded — kills
+        # duplicate chain layers (graph task vs node callable) and, together
+        # with the '|' rule in _outer_node, keeps nested ReAct-agent
+        # internals ('agent'/'tools' loop nodes) out of the node timeline
+        self._seen_ns: set[str] = set()
+        self._ended_ns: set[str] = set()
 
     # -- helpers ---------------------------------------------------------
     def _next_seq(self) -> int:
@@ -110,12 +116,35 @@ class Recorder(BaseCallbackHandler):
     def _node(metadata) -> str:
         return (metadata or {}).get("langgraph_node") or "-"
 
+    @staticmethod
+    def _outer_node(metadata) -> str:
+        """Outer-graph node name. checkpoint_ns of an outer node is
+        '<node>:<task-uuid>'; anything nested inside a subgraph (a ReAct
+        agent's internal 'agent'/'tools' loop) carries
+        '<outer>:<uuid>|<inner>:<uuid>' — those attribute to their OUTER
+        node instead of polluting the timeline with loop nodes."""
+        md = metadata or {}
+        ns = md.get("langgraph_checkpoint_ns") or ""
+        if ns:
+            return ns.split("|")[0].split(":")[0] or "-"
+        return (md.get("langgraph_node") or "-")
+
+    @classmethod
+    def _timeline_node(cls, metadata) -> str:
+        """Node for the timeline: chains INSIDE a nested subgraph (ns
+        contains '|') are not timeline rows — their llm/tool calls appear
+        as children of the outer node instead (verified identical on
+        langchain-core 1.3.2 and 1.4.8)."""
+        if "|" in ((metadata or {}).get("langgraph_checkpoint_ns") or ""):
+            return "-"
+        return cls._outer_node(metadata)
+
     def _node_from(self, metadata, run_id=None, parent_run_id=None) -> str:
-        """Node attribution for llm/tool callbacks: their own metadata if it
-        carries langgraph_node, else the parent chain's (an llm/tool run's
-        parent is the node chain that invoked it, whose run_id we mapped at
-        its on_chain_start)."""
-        node = self._node(metadata)
+        """Node attribution for llm/tool callbacks: the outer node derived
+        from checkpoint_ns (nested ReAct internals attribute outward), else
+        the parent chain's mapped node (an llm/tool run's parent is the
+        node chain that invoked it, mapped at its on_chain_start)."""
+        node = self._outer_node(metadata)
         if node != "-":
             return node
         if parent_run_id is not None:
@@ -268,18 +297,24 @@ class Recorder(BaseCallbackHandler):
     # -- node-level state snapshots (LangGraph nodes surface as chains) ----
     def on_chain_start(self, serialized, inputs, *, run_id=None,
                        parent_run_id=None, metadata=None, **kwargs):
-        node = self._node(metadata)
-        if node != "-":
+        node = self._timeline_node(metadata)
+        ns = (metadata or {}).get("langgraph_checkpoint_ns") or ""
+        if node != "-" and ns not in self._seen_ns:
+            self._seen_ns.add(ns)
             self._run_node[str(run_id)] = node
             self._safe(lambda: self._event(
                 "node_start", node, {"inputs": _jsonable(inputs)}))
 
     def on_chain_end(self, outputs, *, run_id=None, parent_run_id=None,
                      metadata=None, **kwargs):
-        node = self._node(metadata)
+        node = self._timeline_node(metadata)
         if node == "-":
             node = self._run_node.get(str(run_id), "-")
-        if node != "-":
+        ns = (metadata or {}).get("langgraph_checkpoint_ns") or ""
+        if node != "-" and (not ns or (ns in self._seen_ns
+                                       and ns not in self._ended_ns)):
+            if ns:
+                self._ended_ns.add(ns)
             self._safe(lambda: self._event(
                 "node_output", node, {"outputs": _jsonable(outputs)}))
 
@@ -435,6 +470,11 @@ async def run_stream(graph, inputs, *, label: str = "", db_path=None,
             _mark(conn, rid, "ok")
         except Exception as exc:  # the user's failure: record, then re-raise
             _mark(conn, rid, "failed", f"{exc.__class__.__name__}: {exc}")
+            raise
+        except BaseException as exc:  # GeneratorExit/CancelledError:消费方提前
+            # 关闭了流(浏览器断开 SSE、任务取消)——同步落终态(此处不得 await),
+            # 否则 run 永久卡 running;随后原样重抛保持关闭协议
+            _mark(conn, rid, "failed", f"{exc.__class__.__name__}: 流被提前中断")
             raise
     finally:
         conn.close()

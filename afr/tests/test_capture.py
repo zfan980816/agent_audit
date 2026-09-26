@@ -215,3 +215,85 @@ def test_setup_survives_viewer_startup_failure(monkeypatch):
 
     monkeypatch.setattr(cli, "start_viewer", boom)
     assert cap.setup(view=True) is None  # 吞掉并降级,不抛
+
+
+def test_nested_react_agent_stays_out_of_timeline(tmp_path):
+    """外层节点里跑 create_react_agent(TravelPlanning 实战结构):内层
+    agent/tools 循环节点不得成为时间轴行;其 LLM/工具调用归属外层节点。
+    2026-09-26 接入实战教训:内层每轮循环曾以 agent ×N 平铺污染瀑布图。"""
+    pytest.importorskip("langgraph")
+    from langchain_core.language_models.fake_chat_models import (
+        FakeMessagesListChatModel)
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.prebuilt import create_react_agent
+    from typing_extensions import TypedDict
+
+    @tool
+    def lookup(q: str) -> str:
+        """Look something up in the fake database."""
+        return "42"
+
+    class _ToolFake(FakeMessagesListChatModel):  # react agent 需要 bind_tools
+        def bind_tools(self, tools, **kw):
+            return self  # 工具调用已写死在脚本消息里,绑定空实现即可
+
+    model = _ToolFake(responses=[
+        AIMessage("", tool_calls=[{"name": "lookup", "args": {"q": "x"},
+                                   "id": "c1"}]),
+        AIMessage("done"),
+    ])
+    agent = create_react_agent(model, tools=[lookup])
+
+    class S(TypedDict):
+        q: str
+
+    def outer(state, config=None):  # config 透传,内层回调才可见
+        r = agent.invoke({"messages": [("user", state["q"])]}, config=config)
+        return {"q": r["messages"][-1].content}
+
+    g = StateGraph(S)
+    g.add_node("transport", outer)
+    g.add_edge(START, "transport")
+    g.add_edge("transport", END)
+    afr.run(g.compile(), {"q": "hi"}, db_path=tmp_path / "n.db",
+            label="nested")
+
+    conn = sqlite3.connect(tmp_path / "n.db")
+    starts = [r[0] for r in conn.execute(
+        "SELECT DISTINCT node FROM events WHERE kind='node_start'")]
+    assert starts == ["transport"]  # 内层 'agent'/'tools' 不得出现
+    outs = conn.execute(
+        "SELECT COUNT(*) FROM events WHERE kind='node_output'").fetchone()[0]
+    assert outs == 1  # graph task + node callable 双层 chain 只记一次输出
+    assert conn.execute(  # 2 次模型调用(带工具调用 + 收尾)归属外层节点
+        "SELECT COUNT(*) FROM llm_calls WHERE node='transport'"
+    ).fetchone()[0] == 2
+    assert conn.execute(  # 1 次工具调用归属外层节点
+        "SELECT COUNT(*) FROM tool_calls WHERE node='transport'"
+    ).fetchone()[0] == 1
+    conn.close()
+
+
+def test_run_stream_abandoned_marks_failed(tmp_path):
+    """消费方提前关掉流(浏览器断开 SSE → GeneratorExit)必须落 failed
+    终态,不得永久卡 running。2026-09-26 实战教训。"""
+    import asyncio
+    pytest.importorskip("langgraph")
+    from afr import run_stream
+    from examples.flaky_demo import build
+
+    async def abandon():
+        gen = run_stream(build(), {"topic": "s"},
+                         db_path=tmp_path / "a.db", label="stream-abandon")
+        async for _ in gen:  # 拿到第一块就撤
+            break
+        await gen.aclose()   # 模拟 StreamingResponse 关闭生成器
+
+    asyncio.run(abandon())
+    conn = sqlite3.connect(tmp_path / "a.db")
+    row = conn.execute(
+        "SELECT status, error FROM runs WHERE label='stream-abandon'").fetchone()
+    assert row is not None and row[0] == "failed" and "提前中断" in row[1]
+    conn.close()
