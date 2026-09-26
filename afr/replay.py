@@ -58,11 +58,25 @@ def _to_messages_json(input) -> str:
 
 
 def _node_from_config(config) -> str:
+    """Node name for stub keys — matching how capture recorded it.
+
+    User code inside a node calls tool.invoke(...) WITHOUT config; the
+    node's metadata travels in langchain's contextvar instead. Capture's
+    callbacks see it, so replay must read the same source or the
+    (run_id, node, ...) keys never agree.
+    """
     try:
         md = (config or {}).get("metadata") or {}
-        return md.get("langgraph_node") or "-"
     except Exception:
-        return "-"
+        md = {}
+    if not md:
+        try:
+            # langchain_core 1.x renamed runnable.config -> runnables.config
+            from langchain_core.runnables.config import var_child_runnable_config
+            md = ((var_child_runnable_config.get() or {}).get("metadata")) or {}
+        except Exception:
+            md = {}
+    return md.get("langgraph_node") or "-"
 
 
 class ReplaySession:

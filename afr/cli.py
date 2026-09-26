@@ -500,7 +500,7 @@ def create_app(db_url: str) -> FastAPI:
         rows = _run_rows(conn, status, q)
         banner = conn.execute(
             "SELECT COUNT(*) c FROM (SELECT status FROM runs"
-            " ORDER BY started_at DESC, id DESC LIMIT 50)"
+            " ORDER BY started_at DESC, id DESC LIMIT 50) AS recent"
             " WHERE status='failed'").fetchone()["c"]
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
             "runs": rows, "db": shown_db, "status": status or "",

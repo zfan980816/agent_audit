@@ -268,13 +268,21 @@ def tool_args(input) -> str:
 
     Callbacks hand capture a string; replay's patched invoke sees the raw
     object. Both funnel through here so the args_hash always agrees.
+    langchain's on_tool_start hands us str(dict) — a Python repr with
+    single quotes — so after json.loads fails we retry literal_eval before
+    falling back to the raw string (real-graph runs hit this; replay would
+    otherwise never match a captured tool call).
     """
     obj = input
     if isinstance(input, str):
         try:
             obj = json.loads(input)
         except (ValueError, TypeError):
-            obj = input
+            try:
+                import ast
+                obj = ast.literal_eval(input)
+            except (ValueError, SyntaxError):
+                obj = input
     return canonical_json(obj)
 
 
