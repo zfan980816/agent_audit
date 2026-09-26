@@ -349,13 +349,27 @@ def _trace_tree(conn, run_id: str):
             break
 
     def _pv(obj, prefix="", limit=46):
-        """One-line Input/Output/Error cell preview (LangSmith trace table)."""
-        try:
-            s = obj if isinstance(obj, str) else json.dumps(
-                obj, ensure_ascii=False, default=str)
-        except Exception:
-            s = str(obj)
-        s = prefix + " ".join(s.split())
+        """One-line Input/Output/Error cell preview (LangSmith trace table).
+
+        Dicts render as key=value pairs (days=3, destination=长沙 +17字段)
+        — a full JSON dump here is what makes the table unreadable."""
+        if isinstance(obj, dict) and not prefix:
+            parts = []
+            for i, (k, v) in enumerate(obj.items()):
+                if i >= 3:
+                    parts.append(f"+{len(obj) - 3}字段")
+                    break
+                if isinstance(v, (list, dict)):
+                    v = f"[{len(v)}项]" if v else "[]"
+                parts.append(f"{k}={str(v)[:14]}")
+            s = ", ".join(parts)
+        else:
+            try:
+                s = obj if isinstance(obj, str) else json.dumps(
+                    obj, ensure_ascii=False, default=str)
+            except Exception:
+                s = str(obj)
+        s = prefix + " ".join(str(s).split())
         return s[:limit] + ("…" if len(s) > limit else "")
 
     for n in nodes:
@@ -364,6 +378,18 @@ def _trace_tree(conn, run_id: str):
         n["err"] = (_pv(first_error["msg"], limit=40)
                     if first_error and first_error["node"] == n["node"]
                     and first_error.get("msg") else None)
+
+        def _pretty_obj(o):
+            if o is None or isinstance(o, str):
+                return o
+            try:
+                return json.dumps(o, ensure_ascii=False, indent=2,
+                                  default=str)
+            except Exception:
+                return str(o)
+
+        n["inputs_p"] = _pretty_obj(n["inputs"])
+        n["outputs_p"] = _pretty_obj(n["outputs"])
         for c in n["children"]:
             if c["type"] == "llm":
                 human = next((m for m in c["cards"]
@@ -379,6 +405,37 @@ def _trace_tree(conn, run_id: str):
                 res = (c.get("tc") or {}).get("result")
                 c["out"] = _pv(res) if res else None
                 c["err"] = _pv(res, limit=40) if not c["ok"] and res else None
+    # Fold repeated executions of the same node into ONE row: food_check
+    # running 3x in a retry loop is one logical step, not three rows each
+    # dumping the full state again. Each visit stays drillable per-exec.
+    folded, by_name = [], {}
+    for n in nodes:
+        f = by_name.get(n["node"])
+        if f is None:
+            f = {"node": n["node"], "execs": [], "children": []}
+            by_name[n["node"]] = f
+            folded.append(f)
+        f["execs"].append(n)
+        f["children"].extend(n["children"])
+    for f in folded:
+        f["count"] = len(f["execs"])
+        f["dur"] = sum(e["dur"] for e in f["execs"])
+        f["tokens"] = sum(e["tokens"] for e in f["execs"])
+        f["cost"] = sum(e["cost"] for e in f["execs"])
+        first = f["execs"][0]
+        f["ts"], f["off"], f["wid"] = first["ts"], first["off"], first["wid"]
+        f["inp"], f["out"] = first["inp"], first["out"]
+        f["err"] = next((e["err"] for e in f["execs"] if e["err"]), None)
+        # specific display name: append what this node actually invoked
+        seen, calls = set(), []
+        for c in f["children"]:
+            if c["name"] not in seen:
+                seen.add(c["name"])
+                calls.append(c["name"])
+        f["disp"] = f["node"] + (" · " + "、".join(calls[:3]) +
+                                 (f" 等{len(calls)}个" if len(calls) > 3
+                                  else ""))
+
     # best diff counterpart: latest same-label run of the OPPOSITE status,
     # falling back to any latest same-label run (LangSmith has no such
     # one-click jump — this is our first-divergence workflow's front door)
@@ -399,7 +456,8 @@ def _trace_tree(conn, run_id: str):
             " AND id != ? ORDER BY started_at DESC, id DESC LIMIT 1",
             (meta["label"], meta["label"], run_id)).fetchone()
         pair = r["id"] if r else None
-    return {"meta": meta, "nodes": nodes, "total": total, "tokens": tokens,
+    return {"meta": meta, "nodes": folded, "exec_total": len(nodes),
+            "total": total, "tokens": tokens,
             "cost": cost, "models": models, "first_error": first_error,
             "diff_pair": pair,
             "span": span, "slow": total > 30.0, "started": started}
