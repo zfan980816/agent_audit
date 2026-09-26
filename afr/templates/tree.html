@@ -61,10 +61,10 @@
   </div>
 
   {% for n in t.nodes %}
-  <details class="wf-row" open>
-    <summary class="wf-line" title="{{ n.node }}">
+  <details class="wf-row">
+    <summary class="wf-line" title="{{ n.disp }}">
       <span class="wf-name">
-        <span class="caret"></span><span class="ic ic-node">▦</span><span class="nm">{{ n.node }}</span>
+        <span class="caret"></span><span class="ic ic-node">▦</span><span class="nm">{{ n.disp }}</span>
       </span>
       <span class="pv" {% if n.inp %}title="{{ n.inp }}"{% endif %}>{{ n.inp or "—" }}</span>
       <span class="pv" {% if n.out %}title="{{ n.out }}"{% endif %}>{{ n.out or "—" }}</span>

@@ -301,6 +301,16 @@ def _trace_tree(conn, run_id: str):
         n["cost"] = sum(c.get("cost") or 0.0 for c in n["children"])
         n["slow"] = n["dur"] > 10.0
         n["off"], n["wid"] = _gantt(n["ts"], n["dur"])
+        # specific display name: append what this node actually invoked
+        # (agent -> agent · qwen3.8-flash; tools -> tools · search_nearby_food)
+        seen, calls = set(), []
+        for c in n["children"]:
+            if c["name"] not in seen:
+                seen.add(c["name"])
+                calls.append(c["name"])
+        n["disp"] = n["node"] + (" · " + "、".join(calls[:3]) +
+                                 (f" 等{len(calls)}个" if len(calls) > 3
+                                  else ""))
     tokens = sum(n["tokens"] for n in nodes)
     cost = sum(n["cost"] for n in nodes)
     started = (meta["started_at"] or "").replace("T", " ")
