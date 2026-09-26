@@ -66,43 +66,6 @@ def _run_rows(conn, status: str | None = None):
     return conn.execute(_LIST_SQL.format(where=where), args).fetchall()
 
 
-def _preview(obj, limit=88):
-    """One-line run input/output preview for the traces list."""
-    try:
-        s = obj if isinstance(obj, str) else json.dumps(
-            obj, ensure_ascii=False, default=str)
-    except Exception:
-        s = str(obj)
-    s = " ".join(s.split())
-    return s[:limit] + ("…" if len(s) > limit else "")
-
-
-def _run_previews(conn, run_ids):
-    """first node input + last node output per run (LangSmith Input/Output columns)."""
-    if not run_ids:
-        return {}
-    marks = ",".join("?" * len(run_ids))
-    out = {}
-    for kind, agg in (("node_start", "MIN"), ("node_output", "MAX")):
-        rows = conn.execute(
-            f"SELECT e.run_id, e.payload FROM events e"
-            f" JOIN (SELECT run_id, {agg}(seq) s FROM events"
-            f"        WHERE kind=? AND run_id IN ({marks}) GROUP BY run_id) g"
-            f" ON e.run_id=g.run_id AND e.seq=g.s",
-            (kind, *run_ids)).fetchall()
-        for r in rows:
-            try:
-                payload = json.loads(r["payload"])
-                val = payload.get("inputs" if kind == "node_start"
-                                  else "outputs")
-            except Exception:
-                val = None
-            slot = out.setdefault(r["run_id"], {})
-            slot["inp" if kind == "node_start" else "out"] = _preview(val) \
-                if val is not None else None
-    return out
-
-
 def _pretty(js: str | None) -> str:
     if not js:
         return ""
@@ -436,14 +399,13 @@ def create_app(db_path) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def traces_page(request: Request, status: str | None = None):
         rows = _run_rows(conn, status)
-        previews = _run_previews(conn, [r["id"] for r in rows])
         banner = conn.execute(
             "SELECT COUNT(*) c FROM (SELECT status FROM runs"
             " ORDER BY started_at DESC, id DESC LIMIT 50)"
             " WHERE status='failed'").fetchone()["c"]
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
             "runs": rows, "db": str(db_path), "status": status or "",
-            "previews": previews, "banner_fails": banner,
+            "banner_fails": banner,
         })
 
     @app.get("/stats", response_class=HTMLResponse)
@@ -461,10 +423,8 @@ def create_app(db_path) -> FastAPI:
     def run_page(request: Request, run_id: str):
         t = _trace_tree(conn, run_id)
         rows = _run_rows(conn)
-        previews = _run_previews(conn, [r["id"] for r in rows])
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
             "runs": rows, "db": str(db_path), "status": "",
-            "previews": previews,
             "selected": run_id, "tree": t,
         })
 
