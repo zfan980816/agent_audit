@@ -13,8 +13,8 @@ on demand — it is NOT part of the capture path (design constraint).
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from .capture import DEFAULT_DB, connect
+from .db import DatabaseError, mask_password, resolve_db_url
 from .diff import diff
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -50,9 +51,6 @@ def _lat_class(v):
 
 _LIST_SQL = """
 SELECT r.id, r.label, r.status, r.started_at, r.finished_at, r.error, r.fork_of,
-  CASE WHEN r.finished_at IS NULL THEN NULL
-       ELSE CAST((julianday(r.finished_at) - julianday(r.started_at)) * 86400
-                 AS REAL) END AS latency,
   (SELECT COALESCE(SUM(tokens), 0) FROM llm_calls WHERE run_id = r.id) AS tokens
 FROM runs r
 {where}
@@ -61,6 +59,23 @@ ORDER BY r.started_at DESC, r.id DESC LIMIT 200
 
 
 _TEMPLATES.env.globals.update(_k=_k, _lat_cls=_lat_class)
+
+
+def _latency(started: str | None, finished: str | None):
+    """Wall seconds between the two run timestamps (None if unfinished).
+
+    Computed in Python — not julianday/TIMESTAMPDIFF — so the list page,
+    detail page and stats page share ONE identical latency definition on
+    every backend (sqlite / mysql / dm).
+    """
+    if not started or not finished:
+        return None
+    try:
+        s = dt.datetime.strptime(started[:19], "%Y-%m-%dT%H:%M:%S")
+        f = dt.datetime.strptime(finished[:19], "%Y-%m-%dT%H:%M:%S")
+        return max(0.0, (f - s).total_seconds())
+    except ValueError:
+        return None
 
 
 def _run_rows(conn, status: str | None = None, q: str | None = None):
@@ -72,7 +87,11 @@ def _run_rows(conn, status: str | None = None, q: str | None = None):
         cond.append("(r.label LIKE ? OR r.id LIKE ?)")
         args += [f"%{q}%", f"%{q}%"]
     where = ("WHERE " + " AND ".join(cond)) if cond else ""
-    return conn.execute(_LIST_SQL.format(where=where), tuple(args)).fetchall()
+    rows = [dict(r) for r in
+            conn.execute(_LIST_SQL.format(where=where), tuple(args)).fetchall()]
+    for r in rows:
+        r["latency"] = _latency(r["started_at"], r["finished_at"])
+    return rows
 
 
 def _pretty(js: str | None) -> str:
@@ -168,16 +187,11 @@ def _trace_tree(conn, run_id: str):
              "tool": [ev["ts"] for ev in events if ev["kind"] == "tool"]}
     t0 = events[0]["ts"] if events else None
     span = max(0.0, events[-1]["ts"] - events[0]["ts"]) if len(events) > 1 else 0.0
-    # wall latency from the runs table — same source as the list column,
-    # so the two numbers can never disagree. The gantt scale is the larger
-    # of the two so bars never overshoot the track and the honest gap
-    # between last event and wall time stays visible as empty track.
-    wall = None
-    if meta["finished_at"] and meta["started_at"]:
-        rw = conn.execute(
-            "SELECT CAST((julianday(finished_at)-julianday(started_at))"
-            "*86400 AS REAL) l FROM runs WHERE id=?", (run_id,)).fetchone()
-        wall = rw["l"] if rw else None
+    # wall latency from the runs table — same source and same helper as the
+    # list column, so the two numbers can never disagree. The gantt scale is
+    # the larger of the two so bars never overshoot the track and the honest
+    # gap between last event and wall time stays visible as empty track.
+    wall = _latency(meta["started_at"], meta["finished_at"])
     total = wall if wall is not None else span
     gantt_total = max(total or 0.0, span)
 
@@ -315,8 +329,8 @@ def _trace_tree(conn, run_id: str):
     cost = sum(n["cost"] for n in nodes)
     started = (meta["started_at"] or "").replace("T", " ")
     models = [r[0] for r in conn.execute(
-        "SELECT DISTINCT model FROM llm_calls WHERE run_id=? AND model != '?'"
-        " ORDER BY model", (run_id,))]
+        "SELECT DISTINCT model FROM llm_calls WHERE run_id=? AND model != ?"
+        " ORDER BY model", (run_id, "?"))]
     # failure diagnosis: first child that errored (node + tool/llm + message)
     first_error = None
     for n in nodes:
@@ -369,17 +383,20 @@ def _trace_tree(conn, run_id: str):
     # one-click jump — this is our first-divergence workflow's front door)
     pair = None
     opposite = {"failed": "ok", "ok": "failed"}.get(meta["status"])
+    # NULL-safe label match without sqlite's `IS ?` (mysql/dm don't accept
+    # a bound param after IS): `= ?` plus an explicit NULL-NULL branch
+    _nullsafe = "(label = ? OR (label IS NULL AND ? IS NULL))"
     if opposite:
         r = conn.execute(
-            "SELECT id FROM runs WHERE status=? AND label IS ? AND id != ?"
-            " ORDER BY started_at DESC, id DESC LIMIT 1",
-            (opposite, meta["label"], run_id)).fetchone()
+            "SELECT id FROM runs WHERE status=? AND " + _nullsafe +
+            " AND id != ? ORDER BY started_at DESC, id DESC LIMIT 1",
+            (opposite, meta["label"], meta["label"], run_id)).fetchone()
         pair = r["id"] if r else None
     if not pair:
         r = conn.execute(
-            "SELECT id FROM runs WHERE label IS ? AND id != ?"
-            " ORDER BY started_at DESC, id DESC LIMIT 1",
-            (meta["label"], run_id)).fetchone()
+            "SELECT id FROM runs WHERE " + _nullsafe +
+            " AND id != ? ORDER BY started_at DESC, id DESC LIMIT 1",
+            (meta["label"], meta["label"], run_id)).fetchone()
         pair = r["id"] if r else None
     return {"meta": meta, "nodes": nodes, "total": total, "tokens": tokens,
             "cost": cost, "models": models, "first_error": first_error,
@@ -419,10 +436,7 @@ def _stats(conn):
     """Monitoring overview (D17 A+C): per-flow health + cost estimate."""
     prices = _prices()
     runs = conn.execute("""
-      SELECT r.id, r.label, r.status, r.started_at, r.error,
-        CASE WHEN r.finished_at IS NULL THEN NULL
-             ELSE CAST((julianday(r.finished_at) - julianday(r.started_at))
-                       * 86400 AS REAL) END AS latency
+      SELECT r.id, r.label, r.status, r.started_at, r.finished_at, r.error
       FROM runs r ORDER BY r.started_at DESC, r.id DESC LIMIT 1000""").fetchall()
     tok_rows = conn.execute(
         "SELECT run_id, model, SUM(tokens) t FROM llm_calls"
@@ -444,8 +458,9 @@ def _stats(conn):
         if r["status"] == "failed":
             f["fails"] += 1
             total_fail += 1
-        if r["latency"] is not None:
-            f["lat"].append(r["latency"])
+        lat = _latency(r["started_at"], r["finished_at"])
+        if lat is not None:
+            f["lat"].append(lat)
         for model, tok in tok_by_run.get(r["id"], {}).items():
             cost = (tok / 1000.0) * _price_for(model, prices)
             f["tokens"] += tok
@@ -474,9 +489,10 @@ def _stats(conn):
     }
 
 
-def create_app(db_path) -> FastAPI:
+def create_app(db_url: str) -> FastAPI:
     app = FastAPI(title="Agent Flight Recorder", docs_url=None, redoc_url=None)
-    conn = connect(db_path)
+    conn = connect(db_url=db_url)
+    shown_db = mask_password(db_url)
 
     @app.get("/", response_class=HTMLResponse)
     def traces_page(request: Request, status: str | None = None,
@@ -487,14 +503,14 @@ def create_app(db_path) -> FastAPI:
             " ORDER BY started_at DESC, id DESC LIMIT 50)"
             " WHERE status='failed'").fetchone()["c"]
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
-            "runs": rows, "db": str(db_path), "status": status or "",
+            "runs": rows, "db": shown_db, "status": status or "",
             "q": q or "", "banner_fails": banner,
         })
 
     @app.get("/stats", response_class=HTMLResponse)
     def stats_page(request: Request):
         return _TEMPLATES.TemplateResponse(request, "stats.html", {
-            "s": _stats(conn), "db": str(db_path),
+            "s": _stats(conn), "db": shown_db,
         })
 
     @app.get("/run/{run_id}/tree", response_class=HTMLResponse)
@@ -507,7 +523,7 @@ def create_app(db_path) -> FastAPI:
         t = _trace_tree(conn, run_id)
         rows = _run_rows(conn)
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
-            "runs": rows, "db": str(db_path), "status": "",
+            "runs": rows, "db": shown_db, "status": "",
             "selected": run_id, "tree": t,
         })
 
@@ -520,20 +536,21 @@ def create_app(db_path) -> FastAPI:
     return app
 
 
-def _open_db(path: str):
+def _open_db(url: str):
     try:
-        return connect(path)
-    except sqlite3.DatabaseError as exc:
-        print(f"[afr] 无法打开录制库 {path}: {exc.__class__.__name__}: {exc}\n"
-              f"       文件可能已损坏或不是 afr 数据库。", file=sys.stderr)
+        return connect(db_url=url)
+    except DatabaseError as exc:
+        print(f"[afr] 无法打开录制库 {mask_password(url)}: {exc}\n"
+              f"       连接信息可能不正确，或库文件已损坏。", file=sys.stderr)
         sys.exit(2)
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rec",
                                  description="Agent Flight Recorder")
-    ap.add_argument("--db", default=str(DEFAULT_DB),
-                    help=f"SQLite 记录库路径（默认 {DEFAULT_DB}）")
+    ap.add_argument("--db", default=None,
+                    help="数据库 URL 或 sqlite 路径（默认走 $AFR_DB_URL /"
+                         f" ~/.afr/config.json / {DEFAULT_DB}）")
     sub = ap.add_subparsers(dest="cmd")
 
     v = sub.add_parser("view", help="启动三页查看器（列表/详情/diff）")
@@ -550,15 +567,16 @@ def main(argv=None) -> int:
                    help="工具未命中时默认同意真实执行（跳过征询）")
 
     args = ap.parse_args(argv)
+    url = resolve_db_url(args.db)  # param > $AFR_DB_URL > config > default
 
     if args.cmd == "view":
-        _open_db(args.db)  # fail fast on corrupt DB before starting uvicorn
+        _open_db(url)  # fail fast on a bad DB before starting uvicorn
         import uvicorn
-        uvicorn.run(create_app(args.db), host="127.0.0.1",
+        uvicorn.run(create_app(url), host="127.0.0.1",
                     port=args.port, log_level="warning")
         return 0
     if args.cmd == "diff":
-        conn = _open_db(args.db)
+        conn = _open_db(url)
         result = diff(conn, args.a, args.b)
         if not result["aligned"]:
             print(f"不可对齐: {result['reason']}")
@@ -571,12 +589,13 @@ def main(argv=None) -> int:
                 print("\n".join(row["diff"][:12]))
         return 0
     if args.cmd == "replay":
-        conn = _open_db(args.db)
+        conn = _open_db(url)
         meta = conn.execute("SELECT id FROM runs WHERE id=?",
                             (args.run_id,)).fetchone()
         conn.close()
         if meta is None:
-            print(f"[afr] run {args.run_id} 不存在于 {args.db}", file=sys.stderr)
+            print(f"[afr] run {args.run_id} 不存在于 {mask_password(url)}",
+                  file=sys.stderr)
             return 2
         mod_name, func_name = args.entry.split(":")
         import importlib
@@ -584,7 +603,7 @@ def main(argv=None) -> int:
         from .replay import replay as do_replay
         graph = build()
         _, tel = do_replay(graph, {}, source_run_id=args.run_id,
-                           db_path=args.db, assume_yes=args.yes)
+                           db_url=url, assume_yes=args.yes)
         print(f"重放完成，fork run = {tel['fork_run']}")
         return 0
 

@@ -18,7 +18,6 @@ Review decisions implemented here:
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 import time
 import uuid
@@ -29,6 +28,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import BaseTool
 
+from . import db
 from .capture import canonical_json, content_hash, llm_key, tool_args
 
 
@@ -68,7 +68,7 @@ def _node_from_config(config) -> str:
 class ReplaySession:
     """Fork session: reads source run, writes only its own fork run."""
 
-    def __init__(self, conn: sqlite3.Connection, source_run_id: str,
+    def __init__(self, conn: db.DB, source_run_id: str,
                  assume_yes: bool = False):
         self.conn = conn
         self.source = source_run_id
@@ -196,7 +196,7 @@ def _patched(session: ReplaySession):
         BaseTool.invoke = orig_tool
 
 
-def replay(graph, inputs, *, source_run_id: str, db_path=None,
+def replay(graph, inputs, *, source_run_id: str, db_path=None, db_url=None,
            assume_yes: bool = False):
     """Deterministically replay a captured run against (possibly edited) code.
 
@@ -206,7 +206,7 @@ def replay(graph, inputs, *, source_run_id: str, db_path=None,
     """
     from .capture import connect
 
-    conn = connect(db_path)
+    conn = connect(db_path, db_url=db_url)
     try:
         session = ReplaySession(conn, source_run_id, assume_yes=assume_yes)
         with _patched(session):

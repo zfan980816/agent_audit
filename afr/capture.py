@@ -13,62 +13,26 @@ Design refs (2026-09-25 eng review):
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 import threading
 import time
 import uuid
-from pathlib import Path
 
 from langchain_core.callbacks import BaseCallbackHandler
 
-DEFAULT_DB = Path.home() / ".afr" / "runs.db"
+from . import db
 
-# Same-process serialization for first-time schema creation: executescript
-# takes its own transaction and busy_timeout does not reliably cover it,
-# so concurrent connect() calls can race into 'database is locked'.
-_SCHEMA_LOCK = threading.Lock()
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS runs(
-  id TEXT PRIMARY KEY, label TEXT, status TEXT,
-  started_at TEXT, finished_at TEXT, error TEXT, fork_of TEXT);
-CREATE TABLE IF NOT EXISTS events(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, seq INTEGER,
-  ts REAL, kind TEXT, node TEXT, payload TEXT);
-CREATE TABLE IF NOT EXISTS llm_calls(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, seq INTEGER, node TEXT,
-  model TEXT, key_hash TEXT, request_json TEXT, response_json TEXT,
-  kind TEXT, tokens INTEGER, dur REAL, params_json TEXT, meta_json TEXT);
-CREATE TABLE IF NOT EXISTS tool_calls(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, seq INTEGER, node TEXT,
-  tool_name TEXT, args_hash TEXT, args_json TEXT, result_json TEXT, kind TEXT);
-CREATE INDEX IF NOT EXISTS idx_llm_key ON llm_calls(run_id, key_hash);
-CREATE INDEX IF NOT EXISTS idx_tool_key ON tool_calls(run_id, tool_name, args_hash);
-CREATE INDEX IF NOT EXISTS idx_ev_run ON events(run_id, seq);
-"""
+DEFAULT_DB = db.DEFAULT_DB  # re-export: cli/__init__ import this
 
 
-def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
-    """Open (and migrate) the recording DB. WAL + busy_timeout per review A4."""
-    path = Path(db_path) if db_path else DEFAULT_DB
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=5.0, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    with _SCHEMA_LOCK:
-        conn.executescript(SCHEMA)
-        try:  # migration for DBs created before llm_calls.dur existed
-            conn.execute("ALTER TABLE llm_calls ADD COLUMN dur REAL")
-        except sqlite3.OperationalError:
-            pass
-        for col in ("params_json", "meta_json"):
-            try:  # migration: invocation params / response metadata
-                conn.execute(f"ALTER TABLE llm_calls ADD COLUMN {col} TEXT")
-            except sqlite3.OperationalError:
-                pass
-    return conn
+def connect(db_path=None, db_url: str | None = None) -> db.DB:
+    """Open (and migrate) the recording DB on any configured backend.
+
+    Resolution lives in afr.db: explicit arg > $AFR_DB_URL > config file >
+    sqlite default. `db_path` is the historical positional form (a path or
+    None); `db_url` accepts a full backend URL.
+    """
+    return db.open(db_url or db_path)
 
 
 def canonical_json(obj) -> str:
@@ -107,7 +71,7 @@ def _stderr(msg: str) -> None:
 class Recorder(BaseCallbackHandler):
     """Persists every LLM / tool / node event of one run. Never raises (A5)."""
 
-    def __init__(self, conn: sqlite3.Connection, run_id: str, label: str = ""):
+    def __init__(self, conn: db.DB, run_id: str, label: str = ""):
         self.conn = conn
         self.run_id = run_id
         self.label = label
@@ -327,15 +291,16 @@ def _jsonable(obj):
     return repr(obj)
 
 
-def run(graph, inputs, *, label: str = "", db_path=None):
+def run(graph, inputs, *, label: str = "", db_path=None, db_url=None):
     """The one-function API: run a graph under the flight recorder.
 
     Mirrors graph.invoke(inputs). The run's own exceptions propagate
     unchanged (the recorder must never mask a real failure); the run row
-    is marked failed and the error stored first.
+    is marked failed and the error stored first. `db_url` targets any
+    backend (mysql://…, dm://…); `db_path` stays the sqlite shorthand.
     """
     rid = uuid.uuid4().hex[:12]
-    conn = connect(db_path)
+    conn = connect(db_path, db_url=db_url)
     try:
         conn.execute(
             "INSERT INTO runs(id, label, status, started_at) VALUES(?,?,?,?)",

@@ -11,6 +11,9 @@
 
 ```bash
 pip install -e .[demo,dev]     # demo 附带 langgraph；dev 附带 pytest
+# 集中存储后端（可选）：
+pip install -e .[mysql]        # MySQL（PyMySQL）
+pip install -e .[dm]           # 达梦 DM8（dmPython；优先从达梦安装介质 drivers/python 安装）
 ```
 
 ## 三个动作
@@ -50,6 +53,45 @@ rec replay <run_id> --entry examples.flaky_demo:build
 ```bash
 python examples/flaky_demo.py
 ```
+
+## 存储后端（SQLite / MySQL / 达梦 DM8）
+
+默认仍是 SQLite 单文件（`~/.afr/runs.db`），**正式/团队环境可切换集中数据库**。
+你只需要提供连接信息——表和索引在首次连接时自动创建，无需手工执行任何 DDL。
+
+连接串的写法：
+
+```
+sqlite:///C:/data/runs.db                  # SQLite 文件
+mysql://user:pass@host:3306/afr            # MySQL
+dm://SYSDBA:pass@host:5236?schema=AFR      # 达梦 DM8（schema 指定模式名）
+```
+
+三种配置方式（优先级从高到低）：
+
+| 方式 | 用法 |
+|---|---|
+| 代码参数 | `run(graph, inputs, db_url="mysql://…")`、`replay(..., db_url=…)` |
+| 环境变量 | `export AFR_DB_URL='mysql://…'` |
+| 配置文件 | `~/.afr/config.json` 写 `{"db_url": "mysql://…"}` |
+
+CLI 同样兼容：`rec --db mysql://… view`，或裸路径 `rec --db D:/x.db view`
+（自动按 SQLite 处理）。什么都不配时行为与旧版完全一致。
+
+达梦前置条件（与 Java 项目同一套路线）：
+
+1. DM 服务端开 **MySQL 兼容模式**（`dm.ini` 设 `COMPATIBLE_MODE=4`，DBA 重启）
+2. Python 侧安装 dmPython：优先从**达梦安装介质** `drivers/python` 安装
+   （PyPI 上的 `dmpython` 为非官方轮子）；驱动缺失时会给出明确提示
+
+注意事项：
+
+- MySQL 建库请用默认的不区分大小写 collation（如 `utf8mb4_0900_ai_ci`）；
+  若用 `*_bin`，查看器的搜索框会区分大小写
+- 集成验证：`examples/docker-compose.yml` 一键起本地 MySQL 8 跑
+  `afr/tests/test_backends_mysql.py`；达梦用 `AFR_TEST_DM_URL` 跑
+  `test_backends_dm.py`（连真实实例）
+
 
 ## 已知限制（v0）
 

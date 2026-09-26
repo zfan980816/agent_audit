@@ -1,0 +1,15 @@
+# 本地起一个 MySQL 8 跑 afr 的 MySQL 后端集成测试:
+#   docker compose -f examples/docker-compose.yml up -d
+#   AFR_TEST_MYSQL_URL='mysql://afr:afr@127.0.0.1:3306/afr' pytest afr/tests/test_backends_mysql.py
+# 库和账号由容器自动创建;afr 首次连接会自动建表,无需手工 DDL。
+services:
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: afr
+      MYSQL_USER: afr
+      MYSQL_PASSWORD: afr
+    ports:
+      - "3306:3306"
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci

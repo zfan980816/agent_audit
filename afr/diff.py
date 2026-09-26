@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import difflib
 import json
-import sqlite3
 
 MAX_DISPLAY_BYTES = 8 * 1024  # C2: truncate huge states in display layer
 
 
-def node_timeline(conn: sqlite3.Connection, run_id: str):
+def node_timeline(conn, run_id: str):
     """Ordered [(node, state_at_entry)] from node_start events.
 
     A node's entry state IS the previous node's output — the handoff
@@ -55,7 +54,7 @@ def _truncated(text: str) -> str:
     return cut + "\n…[truncated by afr — 原始状态超过 8KB]"
 
 
-def diff(conn: sqlite3.Connection, run_a: str, run_b: str) -> dict:
+def diff(conn, run_a: str, run_b: str) -> dict:
     """Compare a failed run (A) against a passing run (B)."""
     rows = {r["id"]: r["status"] for r in conn.execute(
         "SELECT id, status FROM runs WHERE id IN (?,?)", (run_a, run_b))}
