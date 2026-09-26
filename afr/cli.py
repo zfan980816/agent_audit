@@ -295,13 +295,8 @@ def _trace_tree(conn, run_id: str):
     tokens = sum(n["tokens"] for n in nodes)
     cost = sum(n["cost"] for n in nodes)
     started = (meta["started_at"] or "").replace("T", " ")
-    # run-level IO: first node's entry state is the graph input; the last
-    # captured node output is the graph output (LangSmith peek IO panel)
-    run_inputs = nodes[0]["inputs"] if nodes else None
-    run_outputs = next((n["outputs"] for n in reversed(nodes)
-                        if n["outputs"] is not None), None)
     return {"meta": meta, "nodes": nodes, "total": total, "tokens": tokens,
-            "cost": cost, "inputs": run_inputs, "outputs": run_outputs,
+            "cost": cost,
             "span": span, "slow": total > 30.0, "started": started}
 
 

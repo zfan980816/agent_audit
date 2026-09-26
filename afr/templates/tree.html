@@ -30,19 +30,6 @@
 </div>
 {% if t.meta["error"] %}<div class="errbox">{{ t.meta["error"] }}</div>{% endif %}
 
-{% if t.inputs is not none or t.outputs is not none %}
-<div class="io-row">
-  <div class="io-card">
-    <div class="mc-head">{{ roleicon('用户') }}输入</div>
-    {% if t.inputs is not none %}<pre>{{ jblock(t.inputs) }}</pre>{% else %}<div class="sub-note">未捕获</div>{% endif %}
-  </div>
-  <div class="io-card">
-    <div class="mc-head">{{ roleicon('AI') }}输出</div>
-    {% if t.outputs is not none %}<pre>{{ jblock(t.outputs) }}</pre>{% else %}<div class="sub-note">未捕获（run 可能失败于中途）</div>{% endif %}
-  </div>
-</div>
-{% endif %}
-
 {% if t.nodes %}
 <div class="panel">
   <div class="wf-head">
