@@ -36,6 +36,15 @@ DEFAULT_DB = Path.home() / ".afr" / "runs.db"
 DEFAULT_URL = "sqlite:///" + str(DEFAULT_DB).replace("\\", "/")
 CONFIG_PATH = Path.home() / ".afr" / "config.json"
 
+# afr.setup()'s in-code configuration (checked after explicit run() params)
+_SETUP_URL: str | None = None
+
+
+def configure(db_url) -> None:
+    """Remember the db URL set from application code (afr.setup)."""
+    global _SETUP_URL
+    _SETUP_URL = _coerce(db_url) if db_url else None
+
 
 # -- errors (backend-agnostic; cli catches DatabaseError for clean exit) ----
 class DatabaseError(Exception):
@@ -63,13 +72,15 @@ def _coerce(s) -> str:
 
 def resolve_db_url(param: str | None = None,
                    env: dict | None = None) -> str:
-    """Precedence: explicit param > $AFR_DB_URL > ~/.afr/config.json > default.
+    """Precedence: param > afr.setup() > $AFR_DB_URL > config.json > default.
 
-    With no param, env or config the result is byte-identical to the
+    With no param, setup, env or config the result is byte-identical to the
     historical sqlite default, so existing behavior never shifts.
     """
     if param:
         return _coerce(param)
+    if _SETUP_URL:
+        return _SETUP_URL
     env = os.environ if env is None else env
     if env.get("AFR_DB_URL"):
         return _coerce(env["AFR_DB_URL"])
@@ -267,8 +278,19 @@ _TABLE_COLS = {
 
 
 def open_buffer() -> DB:
-    """The local spill buffer (always sqlite, same schema as the primary)."""
-    return _open_sqlite(str(BUFFER_DB))
+    """The local spill buffer (always sqlite, same schema as the primary).
+
+    Plus a buffer-only column: runs.db_url — each buffered run remembers
+    which database it belongs to, so a flush can never deliver it to a
+    different application's database.
+    """
+    conn = _open_sqlite(str(BUFFER_DB))
+    try:
+        conn.execute("ALTER TABLE runs ADD COLUMN db_url TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already there
+    return conn
 
 
 class _EmptyCursor:
@@ -284,15 +306,53 @@ class _EmptyCursor:
         return iter(())
 
 
+_LOCK_RETRIES = 3
+_LOCK_RETRY_DELAY = 0.3
+
+
+def _transient_lock(exc: Exception) -> bool:
+    """Busy-contention errors are NOT an outage: sqlite 'database is locked'
+    under concurrent writers, MySQL 1205 (lock wait timeout) / 1213
+    (deadlock). Retry a few times before even considering a spill."""
+    code = getattr(exc, "args", [None])[0]
+    if code in (1205, 1213):
+        return True
+    msg = str(exc).lower()
+    return "is locked" in msg or "lock wait" in msg or "deadlock" in msg
+
+
+def _retry_locks(fn, exc: Exception):
+    """Retry fn while it keeps failing with transient lock errors.
+
+    Returns (True, result) on success; (False, last_exc) when the retries
+    run out or the failure is not lock-shaped.
+    """
+    for _ in range(_LOCK_RETRIES):
+        if not _transient_lock(exc):
+            return False, exc
+        time.sleep(_LOCK_RETRY_DELAY)
+        try:
+            return True, fn()
+        except Exception as next_exc:
+            exc = next_exc
+    return False, exc
+
+
 class FailoverConn:
     """Primary-DB facade that spills to the sqlite buffer on outage.
 
     - every write goes to the primary first; the moment one fails, the
       not-yet-confirmed statements are replayed into BUFFER_DB (with a
       reconstructed run row) and all further writes land there;
+    - transient lock contention (sqlite busy / MySQL 1205/1213) is retried
+      first — it is not an outage, and spilling here would misroute the
+      run when the buffer later flushes;
     - the journal only ever holds the current unconfirmed batch (the
       recorder commits after every statement), so replaying it can never
       duplicate rows already committed on the primary;
+    - buffered rows are tagged with the db_url they belong to: a flush
+      only ever returns runs to THEIR database, never to whichever
+      process happens to recover first;
     - a background flusher moves buffered runs back into the primary and
       clears them as soon as it is reachable again.
     """
@@ -318,7 +378,11 @@ class FailoverConn:
         self._journal.append((sql, tuple(params)))
         try:
             return self._primary.execute(sql, params)
-        except Exception:
+        except Exception as exc:
+            ok, res = _retry_locks(
+                lambda: self._primary.execute(sql, params), exc)
+            if ok:
+                return res
             self._failed = True
             self._spill()  # replays the journal, including this statement
             return _EmptyCursor()
@@ -330,12 +394,28 @@ class FailoverConn:
         try:
             self._primary.commit()
             self._journal.clear()
-        except Exception:
+        except Exception as exc:
+            ok, _ = _retry_locks(self._primary.commit, exc)
+            if ok:
+                self._journal.clear()
+                return
             self._failed = True
             self._spill()
             self._buffer.commit()
 
     def close(self):
+        # Down-at-start runs insert their run row only AFTER _spill() ran,
+        # so the db_url tag inside _spill() found no row yet — tag it now
+        # (the IS NULL/'' guard keeps this idempotent with _spill's tag).
+        if self._buffer is not None:
+            try:
+                self._buffer.execute(
+                    "UPDATE runs SET db_url=? WHERE id=?"
+                    " AND (db_url IS NULL OR db_url='')",
+                    (self._db_url, self._rid))
+                self._buffer.commit()
+            except Exception:
+                pass
         for c in (self._primary, self._buffer):
             if c is not None:
                 try:
@@ -360,6 +440,13 @@ class FailoverConn:
                 "INSERT OR REPLACE INTO runs(id, label, status, started_at)"
                 " VALUES(?,?,?,?)",
                 (self._rid, self._label, "running", self._started))
+        # Tag this run with the database it belongs to (covers both the
+        # replayed INSERT row and the reconstruction above): flush delivers
+        # runs only to their own db.
+        self._buffer.execute(
+            "UPDATE runs SET db_url=? WHERE id=?"
+            " AND (db_url IS NULL OR db_url='')",
+            (self._db_url, self._rid))
         self._buffer.commit()
         self._journal.clear()
         start_flusher(self._db_url)
@@ -377,7 +464,11 @@ def flush_buffer(db_url: str) -> int:
         return 0
     buf = open_buffer()
     try:
-        rids = [r["id"] for r in buf.execute("SELECT id FROM runs").fetchall()]
+        # Only this db's runs (NULL/'' = rows spilled by older versions,
+        # which carry no tag and stay flushable anywhere)
+        rids = [r["id"] for r in buf.execute(
+            "SELECT id FROM runs WHERE db_url=? OR db_url IS NULL"
+            " OR db_url=''", (db_url,)).fetchall()]
         if not rids:
             return 0
         primary = open(db_url)
@@ -531,9 +622,21 @@ def open(url: str | None = None) -> DB:
         f"（支持 sqlite:///路径、mysql://、dm://）")
 
 
+def _pymysql_connect(u, database: str | None, autocommit: bool = False):
+    import pymysql
+    return pymysql.connect(
+        host=u.hostname or "127.0.0.1", port=u.port or 3306,
+        user=unquote(u.username or "root"),
+        password=unquote(u.password or ""),
+        database=database, autocommit=autocommit, charset="utf8mb4",
+        # a half-open network (firewall tarpit) must never hang the
+        # business run: fail fast, spill to the buffer, retry later
+        connect_timeout=10, read_timeout=10, write_timeout=10)
+
+
 def _open_mysql(url: str) -> DB:
     try:
-        import pymysql
+        import pymysql  # noqa: F401  (availability check)
     except ImportError:
         raise DriverMissingError(
             "mysql", "pip install agent-flight-recorder[mysql]")
@@ -543,17 +646,28 @@ def _open_mysql(url: str) -> DB:
         raise ConfigurationError(
             f"mysql URL 需要带库名: mysql://user:pass@host:3306/afr")
     try:
-        raw = pymysql.connect(
-            host=u.hostname or "127.0.0.1", port=u.port or 3306,
-            user=unquote(u.username or "root"),
-            password=unquote(u.password or ""),
-            database=database, autocommit=False, charset="utf8mb4",
-            # a half-open network (firewall tarpit) must never hang the
-            # business run: fail fast, spill to the buffer, retry later
-            connect_timeout=10, read_timeout=10, write_timeout=10)
+        raw = _pymysql_connect(u, database)
     except Exception as exc:
-        raise DatabaseError(
-            f"mysql: 连接失败 ({mask_password(url)}): {exc}") from exc
+        # 1049 = 库不存在。"只给连接信息、零手工 DDL"的承诺延伸到库本身:
+        # 自动建一个 utf8mb4 空库(需要账号有 CREATE 权限,IF NOT EXISTS
+        # 让多进程并发首连也安全;库名不合法或权限不足则原样报连接失败)
+        if (getattr(exc, "args", [None])[0] != 1049
+                or not _IDENT_RE.match(database)):
+            raise DatabaseError(
+                f"mysql: 连接失败 ({mask_password(url)}): {exc}") from exc
+        try:
+            admin = _pymysql_connect(u, None, autocommit=True)
+            try:
+                with admin.cursor() as cur:
+                    cur.execute(f"CREATE DATABASE IF NOT EXISTS `{database}`"
+                                " DEFAULT CHARACTER SET utf8mb4")
+            finally:
+                admin.close()
+            raw = _pymysql_connect(u, database)
+        except Exception as exc2:
+            raise DatabaseError(
+                f"mysql: 连接失败且自动建库未成功"
+                f"（{mask_password(url)}）: {exc2}") from exc2
     conn = DB(raw, DIALECTS["mysql"])
     try:
         with _SCHEMA_LOCK:

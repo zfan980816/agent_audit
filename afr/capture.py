@@ -299,6 +299,22 @@ def _jsonable(obj):
     return repr(obj)
 
 
+def setup(db_url=None, *, view: bool = False, view_port: int = 7231):
+    """One-call, in-code configuration: afr.setup(db_url=..., view=True).
+
+    db_url then applies to every afr.run() in this process (an explicit
+    db_url= argument to run() still wins). view=True serves the monitoring
+    page inside the process — start the app, browse http://127.0.0.1:port.
+    Returns the viewer URL when view=True (None if the port was taken).
+    """
+    if db_url:
+        db.configure(db_url)
+    if view:
+        from .cli import start_viewer
+        return start_viewer(db_url, view_port)
+    return None
+
+
 def run(graph, inputs, *, label: str = "", db_path=None, db_url=None):
     """The one-function API: run a graph under the flight recorder.
 

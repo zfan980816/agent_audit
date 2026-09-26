@@ -27,6 +27,17 @@ result = run(graph, inputs)    # 代替 graph.invoke(inputs)
 
 捕获端无服务、无守护进程、无账号。数据落在 `~/.afr/runs.db`（SQLite 单文件，WAL）。
 
+正式接入集中数据库 + 内嵌监控页（应用代码里一次配置，推荐）：
+
+```python
+import afr
+
+afr.setup(db_url="mysql://user:pass@host:3306/afr",  # 库不存在会自动创建
+          view=True)                                  # 应用启动即带监控页
+result = afr.run(graph, inputs)
+# 浏览器打开 http://127.0.0.1:7231 就是监控内容，无需任何额外命令
+```
+
 ### 2. 查看与 diff
 
 ```bash
@@ -67,16 +78,24 @@ mysql://user:pass@host:3306/afr            # MySQL
 dm://SYSDBA:pass@host:5236?schema=AFR      # 达梦 DM8（schema 指定模式名）
 ```
 
-三种配置方式（优先级从高到低）：
+四种配置方式（优先级从高到低）：
 
 | 方式 | 用法 |
 |---|---|
 | 代码参数 | `run(graph, inputs, db_url="mysql://…")`、`replay(..., db_url=…)` |
+| 代码内配置 | `afr.setup(db_url="mysql://…")` 应用启动时调一次，全进程生效 |
 | 环境变量 | `export AFR_DB_URL='mysql://…'` |
 | 配置文件 | `~/.afr/config.json` 写 `{"db_url": "mysql://…"}` |
 
 CLI 同样兼容：`rec --db mysql://… view`，或裸路径 `rec --db D:/x.db view`
 （自动按 SQLite 处理）。什么都不配时行为与旧版完全一致。
+
+**MySQL 的库本身也是自动建的**：连接时报「库不存在」（错误 1049）会自动
+`CREATE DATABASE … DEFAULT CHARACTER SET utf8mb4`（需账号有 CREATE 权限；
+多进程并发首连也安全）。所以接入只需一条连接串，不碰任何 SQL。
+
+监控页面两种开法：`afr.setup(view=True)` 内嵌在应用进程里（`view_port=` 可改
+端口，端口被占时自动跳过、不影响录制），或传统的 `rec view` 独立命令。
 
 达梦前置条件（与 Java 项目同一套路线）：
 

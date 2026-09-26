@@ -39,6 +39,20 @@ def test_resolve_config_file(monkeypatch, tmp_path):
     assert db.resolve_db_url(None) == "dm://u:p@h:5236?schema=AFR"
 
 
+def test_setup_in_code_config_beats_env_and_config_file(monkeypatch, tmp_path):
+    db.configure("mysql://u:p@h:3306/x")
+    try:
+        monkeypatch.setenv("AFR_DB_URL", "sqlite:///env.db")
+        cfg = tmp_path / "config.json"
+        cfg.write_text('{"db_url": "sqlite:///cfg.db"}', encoding="utf-8")
+        monkeypatch.setattr(db, "CONFIG_PATH", cfg)
+        assert db.resolve_db_url(None) == "mysql://u:p@h:3306/x"
+        # an explicit argument still beats afr.setup()
+        assert db.resolve_db_url("sqlite:///param.db") == "sqlite:///param.db"
+    finally:
+        db.configure(None)
+
+
 def test_resolve_default_when_nothing_configured(monkeypatch):
     monkeypatch.delenv("AFR_DB_URL", raising=False)
     monkeypatch.setattr(db, "CONFIG_PATH", Path("/nonexistent/config.json"))

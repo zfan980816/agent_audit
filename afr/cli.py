@@ -540,6 +540,36 @@ def create_app(db_url: str) -> FastAPI:
     return app
 
 
+def start_viewer(db_url: str | None = None, port: int = 7231,
+                 host: str = "127.0.0.1") -> str | None:
+    """Serve the viewer inside a daemon thread; returns its URL (or None).
+
+    Lets an application embed the monitoring page — afr.setup(view=True) at
+    startup, then browse http://127.0.0.1:port, no separate command. A port
+    already taken (e.g. a second app process on the same machine) is noted
+    on stderr and skipped; recording is unaffected.
+    """
+    import socket
+    import threading
+
+    import uvicorn
+    with socket.socket() as s:
+        try:
+            s.bind((host, port))
+        except OSError:
+            print(f"[afr] 监控页面端口 {host}:{port} 已被占用，"
+                  f"本进程不启动内嵌查看器", file=sys.stderr)
+            return None
+    url = resolve_db_url(db_url)
+    server = uvicorn.Server(uvicorn.Config(
+        create_app(url), host=host, port=port, log_level="warning"))
+    threading.Thread(target=server.run, daemon=True,
+                     name="afr-viewer").start()
+    page = f"http://{host}:{port}"
+    print(f"[afr] 监控页面: {page}", file=sys.stderr)
+    return page
+
+
 def _open_db(url: str):
     try:
         return connect(db_url=url)

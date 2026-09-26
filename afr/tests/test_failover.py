@@ -81,7 +81,8 @@ def test_midrun_failure_spills_tail_and_upserts_status(tmp_path):
                 self.inner.close()
 
         conn = db.FailoverConn(FlakyPrimary(real, 3), "rid1", "L",
-                               "2026-09-26T10:00:00", _url(tmp_path / "p.db"))
+                               "2026-09-26T10:00:00",
+                               _url(tmp_path / "primary.db"))
         # 1-3 reach the primary; 4+ spill to the buffer
         conn.execute("INSERT INTO runs(id,label,status,started_at)"
                      " VALUES(?,?,?,?)", ("rid1", "L", "running",
@@ -171,3 +172,82 @@ def test_backlog_reported_while_down_cleared_after_flush(tmp_path,
     down["yes"] = True
     run(_Graph(), {"q": 1}, db_url=url)          # buffers again
     assert db.flush_buffer_best_effort(url) == 1  # backlog visible while down
+
+
+def test_transient_lock_is_retried_not_spilled(tmp_path, monkeypatch):
+    """sqlite 'database is locked' is contention, not an outage — retrying
+    must keep the run on the primary instead of spilling it to the buffer."""
+    monkeypatch.setattr(db, "BUFFER_DB", tmp_path / "buffer.db")
+    monkeypatch.setattr(db, "start_flusher", lambda *a, **k: None)
+    import sqlite3 as sq
+
+    real = db.open(_url(tmp_path / "primary.db"))
+
+    class LockyPrimary:
+        def __init__(self, inner):
+            self.inner, self.first = inner, True
+
+        def execute(self, sql, params=()):
+            if self.first and sql.startswith("INSERT INTO events"):
+                self.first = False
+                raise sq.OperationalError("database is locked")
+            return self.inner.execute(sql, params)
+
+        def commit(self):
+            self.inner.commit()
+
+        def close(self):
+            self.inner.close()
+
+    conn = db.FailoverConn(LockyPrimary(real), "rid9", "L",
+                           "2026-09-26T10:00:00", _url(tmp_path / "p.db"))
+    conn.execute("INSERT INTO runs(id,label,status,started_at)"
+                 " VALUES(?,?,?,?)",
+                 ("rid9", "L", "running", "2026-09-26T10:00:00"))
+    conn.commit()
+    conn.execute("INSERT INTO events(run_id,seq,ts,kind,node,payload)"
+                 " VALUES(?,?,?,?,?,?)",
+                 ("rid9", 1, 0.0, "node_start", "n1", "{}"))
+    conn.commit()
+    conn.close()
+
+    primary = db.open(_url(tmp_path / "primary.db"))
+    assert primary.execute("SELECT COUNT(*) c FROM events WHERE run_id=?",
+                           ("rid9",)).fetchone()["c"] == 1
+    primary.close()
+    buf = db.open_buffer()
+    assert buf.execute("SELECT COUNT(*) c FROM runs"
+                       ).fetchone()["c"] == 0  # never spilled
+    buf.close()
+
+
+def test_buffer_flush_is_routed_to_its_own_db(tmp_path, monkeypatch):
+    """A buffered run is tagged with its db: another application's flush
+    must not pull it into a foreign database."""
+    monkeypatch.setattr(db, "BUFFER_DB", tmp_path / "buffer.db")
+    monkeypatch.setattr(db, "start_flusher", lambda *a, **k: None)
+    url_a = _url(tmp_path / "a.db")
+    url_b = _url(tmp_path / "b.db")
+    real_open = db.open
+    down = {"a": True}
+
+    def flaky_open(u=None):
+        if u == url_a and down["a"]:
+            raise db.DatabaseError("down")
+        return real_open(u)
+
+    monkeypatch.setattr(db, "open", flaky_open)
+    from afr.capture import run
+    run(_Graph(), {"q": 1}, db_url=url_a, label="for-a")
+
+    assert db.flush_buffer(url_b) == 0  # b 的回灌碰不动 a 的数据
+    buf = db.open_buffer()
+    assert buf.execute("SELECT db_url FROM runs").fetchone()["db_url"] \
+        == url_a
+    buf.close()
+
+    down["a"] = False
+    assert db.flush_buffer(url_a) == 1  # a 恢复后自己的回灌生效
+    buf = db.open_buffer()
+    assert buf.execute("SELECT COUNT(*) c FROM runs").fetchone()["c"] == 0
+    buf.close()
