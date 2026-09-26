@@ -315,18 +315,10 @@ def setup(db_url=None, *, view: bool = False, view_port: int = 7231):
     return None
 
 
-def run(graph, inputs, *, label: str = "", db_path=None, db_url=None):
-    """The one-function API: run a graph under the flight recorder.
-
-    Mirrors graph.invoke(inputs). The run's own exceptions propagate
-    unchanged (the recorder must never mask a real failure); the run row
-    is marked failed and the error stored first. `db_url` targets any
-    backend (mysql://…, dm://…); `db_path` stays the sqlite shorthand.
-
-    If the configured DB is unreachable (or dies mid-run), recording
-    spills to the local sqlite buffer and a background flusher writes it
-    back — and clears the buffer — the moment the DB recovers.
-    """
+def _begin_run(label, db_path, db_url):
+    """Shared preamble of run() / run_stream(): resolve the URL, recover
+    outage leftovers, open a failover connection (primary=None = the db is
+    down at start; writes spill to the local buffer)."""
     url = db.resolve_db_url(db_url or db_path)
     backlog = db.flush_buffer_best_effort(url)  # recover outage leftovers
     if backlog:
@@ -341,26 +333,82 @@ def run(graph, inputs, *, label: str = "", db_path=None, db_url=None):
         print(f"[afr] 数据库不可达（{db.mask_password(url)}），"
               f"本次运行暂存本地缓冲，恢复后自动回灌", file=sys.stderr)
     conn = db.FailoverConn(primary, rid, label, started, url)
+    return conn, rid, started
+
+
+def _mark(conn, rid, status, error=None):
+    """Finalize the run row. Bookkeeping must never kill the business flow
+    — a failure here would otherwise replace the user's own exception."""
     try:
         conn.execute(
-            "INSERT INTO runs(id, label, status, started_at) VALUES(?,?,?,?)",
-            (rid, label or getattr(graph, "name", "") or "", "running",
-             started),
-        )
+            "UPDATE runs SET status=?, finished_at=?, error=? WHERE id=?",
+            (status, time.strftime("%Y-%m-%dT%H:%M:%S"), error, rid))
         conn.commit()
+    except Exception:
+        pass
+
+
+def _insert_run_row(conn, rid, label, started, graph):
+    conn.execute(
+        "INSERT INTO runs(id, label, status, started_at) VALUES(?,?,?,?)",
+        (rid, label or getattr(graph, "name", "") or "", "running", started),
+    )
+    conn.commit()
+
+
+def run(graph, inputs, *, label: str = "", db_path=None, db_url=None):
+    """The one-function API: run a graph under the flight recorder.
+
+    Mirrors graph.invoke(inputs). The run's own exceptions propagate
+    unchanged (the recorder must never mask a real failure); the run row
+    is marked failed and the error stored first. `db_url` targets any
+    backend (mysql://…, dm://…); `db_path` stays the sqlite shorthand.
+
+    If the configured DB is unreachable (or dies mid-run), recording
+    spills to the local sqlite buffer and a background flusher writes it
+    back — and clears the buffer — the moment the DB recovers.
+    """
+    conn, rid, started = _begin_run(label, db_path, db_url)
+    try:
+        _insert_run_row(conn, rid, label, started, graph)
         handler = Recorder(conn, rid, label)
         try:
             result = graph.invoke(inputs, config={"callbacks": [handler]})
-            conn.execute("UPDATE runs SET status='ok', finished_at=? WHERE id=?",
-                         (time.strftime("%Y-%m-%dT%H:%M:%S"), rid))
-            conn.commit()
+            _mark(conn, rid, "ok")
             return result
         except Exception as exc:  # the user's failure: record, then re-raise
-            conn.execute(
-                "UPDATE runs SET status='failed', finished_at=?, error=? WHERE id=?",
-                (time.strftime("%Y-%m-%dT%H:%M:%S"),
-                 f"{exc.__class__.__name__}: {exc}", rid))
-            conn.commit()
+            _mark(conn, rid, "failed", f"{exc.__class__.__name__}: {exc}")
+            raise
+    finally:
+        conn.close()
+
+
+async def run_stream(graph, inputs, *, label: str = "", db_path=None,
+                     db_url=None, stream_mode="updates"):
+    """Streaming twin of run(): mirrors graph.astream(inputs, stream_mode=…)
+    chunk-for-chunk while the flight recorder listens on the same callbacks.
+
+    Drop-in replacement for the astream loop of a live API/UI:
+
+        async for chunk in afr.run_stream(g, state, stream_mode="updates"):
+
+    stream_mode passes through untouched (single mode yields chunks, a
+    mode list yields (mode, chunk) pairs — exactly what the consumer gets
+    from the graph). The run row is finalized when the generator finishes;
+    the consumer's exceptions propagate unchanged (recorded as failed).
+    """
+    conn, rid, started = _begin_run(label, db_path, db_url)
+    try:
+        _insert_run_row(conn, rid, label, started, graph)
+        handler = Recorder(conn, rid, label)
+        try:
+            async for chunk in graph.astream(
+                    inputs, stream_mode=stream_mode,
+                    config={"callbacks": [handler]}):
+                yield chunk
+            _mark(conn, rid, "ok")
+        except Exception as exc:  # the user's failure: record, then re-raise
+            _mark(conn, rid, "failed", f"{exc.__class__.__name__}: {exc}")
             raise
     finally:
         conn.close()

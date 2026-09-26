@@ -124,3 +124,62 @@ def test_concurrent_runs_both_recorded(tmp_path):
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 4
     conn.close()
+
+
+def test_run_stream_records_langgraph_astream(tmp_path):
+    """run_stream mirrors graph.astream chunk-for-chunk (stream_mode
+    passthrough) while recording the run — the live API/UI integration."""
+    import asyncio
+    pytest.importorskip("langgraph")
+    from afr import run_stream
+    from examples.flaky_demo import build
+
+    chunks = []
+
+    async def consume():
+        async for chunk in run_stream(build(), {"topic": "s"},
+                                      db_path=tmp_path / "s.db",
+                                      label="stream-lg"):
+            chunks.append(chunk)
+
+    try:
+        asyncio.run(consume())
+        final = "ok"
+    except Exception:
+        final = "failed"  # the demo fails ~50% by design — either way must record
+    assert chunks  # updates 模式:节点每完成一个就 yield 一块,透传未吞
+    conn = sqlite3.connect(tmp_path / "s.db")
+    assert conn.execute(
+        "SELECT status FROM runs WHERE label='stream-lg'").fetchone()[0] == final
+    assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] >= 1
+    conn.close()
+
+
+def test_run_stream_records_failure_and_reraises(tmp_path):
+    import asyncio
+    pytest.importorskip("langgraph")
+    from afr import run_stream
+    from examples.flaky_demo import build, web_search
+
+    def boom(query: str) -> list[str]:
+        raise RuntimeError("search exploded")
+
+    orig = web_search.func
+    web_search.func = boom
+    try:
+
+        async def consume():
+            async for _ in run_stream(build(), {"topic": "s"},
+                                      db_path=tmp_path / "s.db",
+                                      label="stream-err"):
+                pass
+
+        with pytest.raises(RuntimeError):
+            asyncio.run(consume())
+    finally:
+        web_search.func = orig
+    conn = sqlite3.connect(tmp_path / "s.db")
+    row = conn.execute(
+        "SELECT status, error FROM runs WHERE label='stream-err'").fetchone()
+    assert row[0] == "failed" and "search exploded" in row[1]
+    conn.close()
