@@ -153,10 +153,6 @@ class Cursor:
                 return
             yield self._wrap(r)
 
-    @property
-    def rowcount(self) -> int:
-        return getattr(self._raw, "rowcount", -1)
-
 
 class DB:
     """Uniform connection facade over sqlite3 / pymysql / dmPython."""

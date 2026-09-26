@@ -92,27 +92,6 @@ CLI 同样兼容：`rec --db mysql://… view`，或裸路径 `rec --db D:/x.db 
   `afr/tests/test_backends_mysql.py`；达梦用 `AFR_TEST_DM_URL` 跑
   `test_backends_dm.py`（连真实实例）
 
-## 生产控制（录制开关 / 采样 / 数据清理）
-
-**录制开关与采样**——优先级：`run(record=…)` 参数 > `$AFR_RECORD` > 配置文件
-`record` > 默认全录。取值：`0/false/off`（关闭）、`1/true/on`（全录）、
-或 `0~1` 之间的小数（按概率采样）。关闭/被采样掉时图照常执行，
-**零录制开销、不写任何数据**：
-
-```bash
-export AFR_RECORD=off      # 一键停录（生产日常可不录，出问题再开）
-export AFR_RECORD=0.1      # 只录 10% 的运行
-```
-
-**数据清理**——两种方式：
-
-```bash
-rec clean --days 30          # 手动清理：删除 30 天前的 run（含事件/调用明细），可挂 cron
-export AFR_RETAIN_DAYS=30    # 或配置后自动清理：录制时每小时最多清一次
-```
-
-`AFR_RETAIN_DAYS` 也可以写在 `~/.afr/config.json` 的 `retain_days` 字段。
-
 
 ## 已知限制（v0）
 
