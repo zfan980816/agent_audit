@@ -26,6 +26,7 @@
   <span class="chip"{% if t.slow %} title="超过 30s 阈值"{% endif %}>总时长 <b class="{{ _lat_cls(t.total) if t.total }}">{{ "%.1f"|format(t.total) if t.total is not none else "-" }}s</b></span>
   <span class="chip">Token <b>{{ _k(t.tokens) }}</b></span>
   <span class="chip">成本 <b>{{ costfmt(t.cost) }}</b></span>
+  {% if t.models %}<span class="chip">模型 <b>{{ t.models|join("、") }}</b></span>{% endif %}
   <span class="chip">节点 <b>{{ t.nodes|length }}</b></span>
 </div>
 {% if t.meta["error"] %}<div class="errbox">{{ t.meta["error"] }}</div>{% endif %}
@@ -34,6 +35,7 @@
 <div class="panel">
   <div class="wf-head">
     <span>名称</span>
+    <span class="c">开始</span>
     <span class="c">时长</span>
     <span class="c">Token</span>
     <span class="c">成本</span>
@@ -46,6 +48,7 @@
       <span class="wf-name">
         <span class="caret"></span><span class="ic ic-node">▦</span><span class="nm">{{ n.node }}</span>
       </span>
+      <span class="wf-start">+{{ "%.1f"|format((n.off or 0) / 100 * (t.total or 0)) }}s</span>
       <span class="wf-lat {{ _lat_cls(n.dur) }}"{% if n.dur and n.dur >= 10 %} title="{% if n.dur < 60 %}超过 10s{% else %}超过 60s{% endif %}"{% endif %}>{{ durfmt(n.dur) }}</span>
       <span class="wf-tok">{{ _k(n.tokens) }}</span>
       <span class="wf-tok">{{ costfmt(n.cost) }}</span>
@@ -80,6 +83,7 @@
             <span class="caret"></span><span class="ic ic-llm">✦</span><span class="nm">{{ c.name }}</span>
             {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
           </span>
+          <span class="wf-start">+{{ "%.1f"|format((c.off or 0) / 100 * (t.total or 0)) }}s</span>
           <span class="wf-lat {{ _lat_cls(c.dur) }}">{{ durfmt(c.dur) }}</span>
           <span class="wf-tok">{{ _k(c.tokens) }}</span>
           <span class="wf-tok">{{ costfmt(c.cost) }}</span>
@@ -131,6 +135,7 @@
             <span class="caret"></span><span class="ic ic-tool">🔧</span><span class="nm">{{ c.name }}</span>
             {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
           </span>
+          <span class="wf-start">—</span>
           <span class="wf-lat">—</span>
           <span class="wf-tok">—</span>
           <span class="wf-tok">—</span>

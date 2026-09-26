@@ -60,10 +60,16 @@ ORDER BY r.started_at DESC, r.id DESC LIMIT 200
 _TEMPLATES.env.globals.update(_k=_k, _lat_cls=_lat_class)
 
 
-def _run_rows(conn, status: str | None = None):
-    where = "WHERE r.status = ?" if status else ""
-    args = (status,) if status else ()
-    return conn.execute(_LIST_SQL.format(where=where), args).fetchall()
+def _run_rows(conn, status: str | None = None, q: str | None = None):
+    cond, args = [], []
+    if status:
+        cond.append("r.status = ?")
+        args.append(status)
+    if q:
+        cond.append("(r.label LIKE ? OR r.id LIKE ?)")
+        args += [f"%{q}%", f"%{q}%"]
+    where = ("WHERE " + " AND ".join(cond)) if cond else ""
+    return conn.execute(_LIST_SQL.format(where=where), tuple(args)).fetchall()
 
 
 def _pretty(js: str | None) -> str:
@@ -295,8 +301,11 @@ def _trace_tree(conn, run_id: str):
     tokens = sum(n["tokens"] for n in nodes)
     cost = sum(n["cost"] for n in nodes)
     started = (meta["started_at"] or "").replace("T", " ")
+    models = [r[0] for r in conn.execute(
+        "SELECT DISTINCT model FROM llm_calls WHERE run_id=? AND model != '?'"
+        " ORDER BY model", (run_id,))]
     return {"meta": meta, "nodes": nodes, "total": total, "tokens": tokens,
-            "cost": cost,
+            "cost": cost, "models": models,
             "span": span, "slow": total > 30.0, "started": started}
 
 
@@ -392,15 +401,16 @@ def create_app(db_path) -> FastAPI:
     conn = connect(db_path)
 
     @app.get("/", response_class=HTMLResponse)
-    def traces_page(request: Request, status: str | None = None):
-        rows = _run_rows(conn, status)
+    def traces_page(request: Request, status: str | None = None,
+                    q: str | None = None):
+        rows = _run_rows(conn, status, q)
         banner = conn.execute(
             "SELECT COUNT(*) c FROM (SELECT status FROM runs"
             " ORDER BY started_at DESC, id DESC LIMIT 50)"
             " WHERE status='failed'").fetchone()["c"]
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
             "runs": rows, "db": str(db_path), "status": status or "",
-            "banner_fails": banner,
+            "q": q or "", "banner_fails": banner,
         })
 
     @app.get("/stats", response_class=HTMLResponse)

@@ -1,9 +1,14 @@
 {% extends "base.html" %}
 {% block body %}
 <div id="list">
+  <form class="list-search" action="/" method="get">
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    <input type="text" name="q" value="{{ q }}" placeholder="搜索名称 / ID…">
+    {% if q %}<a href="/?{% if status %}status={{ status }}{% endif %}" class="clr" title="清除搜索">✕</a>{% endif %}
+  </form>
   {% if not runs %}
-  <div class="empty">暂无录制。用 <code>afr.run(graph, inputs)</code> 代替
-    <code>graph.invoke()</code> 开始录制。</div>
+  <div class="empty">{% if q %}没有匹配"{{ q }}"的执行。{% else %}暂无录制。用 <code>afr.run(graph, inputs)</code> 代替
+    <code>graph.invoke()</code> 开始录制。{% endif %}</div>
   {% else %}
   <div class="list-head"><span></span><span>名称</span><span style="text-align:right">时间</span><span style="text-align:right">延迟</span><span style="text-align:right">Token</span></div>
   {% endif %}
