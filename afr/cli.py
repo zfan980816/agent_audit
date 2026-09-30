@@ -43,6 +43,14 @@ def _k(n):
     return f"{s}K"
 
 
+def _cny(c):
+    """Cost cell: ¥0.046 / ¥12.34, '—' when unknown (shared by list page
+    and stats so the two never disagree)."""
+    if not c:
+        return "—"
+    return f"¥{c:.3f}" if c < 1 else f"¥{c:.2f}"
+
+
 def _lat_class(v):
     """LangSmith latency colors: green <10s, amber <60s, red beyond."""
     if v is None:
@@ -59,7 +67,7 @@ ORDER BY r.started_at DESC, r.id DESC LIMIT 200
 """
 
 
-_TEMPLATES.env.globals.update(_k=_k, _lat_cls=_lat_class)
+_TEMPLATES.env.globals.update(_k=_k, _lat_cls=_lat_class, _cny=_cny)
 
 
 def _latency(started: str | None, finished: str | None):
@@ -90,8 +98,19 @@ def _run_rows(conn, status: str | None = None, q: str | None = None):
     where = ("WHERE " + " AND ".join(cond)) if cond else ""
     rows = [dict(r) for r in
             conn.execute(_LIST_SQL.format(where=where), tuple(args)).fetchall()]
+    # cost per run (LangSmith list column "Total Cost"): same price table
+    # and same aggregation as the stats page — int() normalizes MySQL's
+    # Decimal SUM back into a number
+    prices = _prices()
+    cost_by_run: dict[str, float] = {}
+    for r in conn.execute(
+            "SELECT run_id, model, SUM(tokens) t FROM llm_calls"
+            " WHERE tokens IS NOT NULL GROUP BY run_id, model").fetchall():
+        cost_by_run[r["run_id"]] = cost_by_run.get(r["run_id"], 0.0) + (
+            int(r["t"] or 0) / 1000.0) * _price_for(r["model"], prices)
     for r in rows:
         r["latency"] = _latency(r["started_at"], r["finished_at"])
+        r["cost"] = cost_by_run.get(r["id"], 0.0)
     return rows
 
 
@@ -324,6 +343,16 @@ def _trace_tree(conn, run_id: str):
         n["cost"] = sum(c.get("cost") or 0.0 for c in n["children"])
         n["slow"] = n["dur"] > 10.0
         n["off"], n["wid"] = _gantt(n["ts"], n["dur"])
+        # 同名子行编号:ReAct 节点内同一模型的多次调用(决策轮→总结轮)
+        # 行名完全一样,不编号无法分辨是第几次(c.turn 渲染为 #N 标签)
+        cnt: dict[str, int] = {}
+        for c in n["children"]:
+            cnt[c["name"]] = cnt.get(c["name"], 0) + 1
+        turn: dict[str, int] = {}
+        for c in n["children"]:
+            if cnt[c["name"]] > 1:
+                turn[c["name"]] = turn.get(c["name"], 0) + 1
+                c["turn"] = turn[c["name"]]
         # specific display name: append what this node actually invoked
         # (agent -> agent · qwen3.8-flash; tools -> tools · search_nearby_food)
         seen, calls = set(), []
@@ -475,6 +504,7 @@ def _trace_tree(conn, run_id: str):
 
 _DEFAULT_PRICES = {  # CNY / 1K tokens，混合粗估；~/.afr/prices.json 可覆盖
     "gpt-4o": 0.12, "gpt-4o-mini": 0.01, "gpt-4.1": 0.12,
+    "glm-*": 0.06, "glm-4.5-air": 0.002, "glm-4-flash": 0.002,
     "qwen-max": 0.12, "qwen-plus": 0.02, "qwen-turbo": 0.005,
     "qwen*": 0.02, "deepseek-chat": 0.008, "claude-*": 0.18,
 }

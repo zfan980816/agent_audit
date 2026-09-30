@@ -30,6 +30,23 @@ def test_runs_list_page(tmp_path):
     assert r.status_code == 200 and "#fa" in r.text and 'title="失败"' in r.text
 
 
+def test_aborted_runs_not_counted_as_failures(tmp_path):
+    """流中断是 aborted 不是业务失败:失败 banner 只数 failed,列表用
+    「已中断」图标区分(否则「停止生成」会把服务失败率虚高到不可信)。"""
+    db = tmp_path / "t.db"
+    _seed(db, [("fa", "failed", {"sources": []}),
+               ("ab", "aborted", {"sources": []})])
+    client = TestClient(create_app(db))
+    r = client.get("/")
+    assert r.status_code == 200
+    assert ">1</b> 次失败" in r.text          # 只数 failed,aborted 不进 banner
+    assert ">2</b> 次失败" not in r.text
+    assert 'title="已中断"' in r.text           # 列表行可区分
+    flt = client.get("/", params={"status": "aborted"})
+    # 用 sub">#id</span> 锚定列表行,裸 "#ab" 会撞上 CSS 里的十六进制色值
+    assert 'sub">#ab' in flt.text and 'sub">#fa' not in flt.text
+
+
 def test_run_detail_page(tmp_path):
     db = tmp_path / "t.db"
     _seed(db, [("fa", "failed", {"sources": []})])

@@ -10,7 +10,7 @@
   <div class="empty">{% if q %}没有匹配"{{ q }}"的执行。{% else %}暂无录制。用 <code>afr.run(graph, inputs)</code> 代替
     <code>graph.invoke()</code> 开始录制。{% endif %}</div>
   {% else %}
-  <div class="list-head"><span></span><span>名称</span><span style="text-align:right">时间</span><span style="text-align:right">延迟</span><span style="text-align:right">Token</span></div>
+  <div class="list-head"><span></span><span>名称</span><span style="text-align:right">时间</span><span style="text-align:right">延迟</span><span style="text-align:right">Token</span><span style="text-align:right">成本</span></div>
   {% endif %}
   {% for r in runs %}
   <div class="row {{ r['status'] }} {{ 'sel' if r['id'] == selected else '' }}"
@@ -20,6 +20,8 @@
     <svg class="st" viewBox="0 0 16 16" title="成功"><circle cx="8" cy="8" r="7" fill="#ecfdf3" stroke="#46cd89"/><path d="M5.2 8.4l1.9 1.9 3.6-4.2" fill="none" stroke="#079455" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
     {% elif r['status'] == 'failed' %}
     <svg class="st" viewBox="0 0 16 16" title="失败"><circle cx="8" cy="8" r="7" fill="#fef3f2" stroke="#f04438"/><path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4" fill="none" stroke="#d92d20" stroke-width="1.6" stroke-linecap="round"/></svg>
+    {% elif r['status'] == 'aborted' %}
+    <svg class="st" viewBox="0 0 16 16" title="已中断"><circle cx="8" cy="8" r="7" fill="#f5f8fb" stroke="#94a3b8"/><rect x="5.5" y="5.5" width="5" height="5" rx="1" fill="#64748b"/></svg>
     {% else %}
     <svg class="st" viewBox="0 0 16 16" title="执行中"><circle cx="8" cy="8" r="7" fill="#fffaeb" stroke="#fdb022"/><circle cx="8" cy="8" r="2.2" fill="#d97706"/></svg>
     {% endif %}
@@ -31,6 +33,7 @@
     <span class="num">{{ (r["started_at"][5:10] ~ " " ~ r["started_at"][11:16]) if r["started_at"] else "-" }}</span>
     <span class="num {{ _lat_cls(r['latency']) }}">{% if r["latency"] is none %}…{% else %}<svg class="clk" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="currentColor"/><path d="M6 3.4V6l1.8 1.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>{% if r["latency"] < 1 %}{{ "%.0fms"|format(r["latency"] * 1000) }}{% else %}{{ "%.1fs"|format(r["latency"]) }}{% endif %}{% endif %}</span>
     <span class="num">{{ _k(r["tokens"]) }}</span>
+    <span class="num" title="估算成本（单价可在 ~/.afr/prices.json 覆盖）">{{ _cny(r["cost"]) }}</span>
   </div>
   {% endfor %}
 </div>

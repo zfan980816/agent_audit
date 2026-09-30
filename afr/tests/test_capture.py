@@ -279,9 +279,10 @@ def test_nested_react_agent_stays_out_of_timeline(tmp_path):
     conn.close()
 
 
-def test_run_stream_abandoned_marks_failed(tmp_path):
-    """消费方提前关掉流(浏览器断开 SSE → GeneratorExit)必须落 failed
-    终态,不得永久卡 running。2026-09-26 实战教训。"""
+def test_run_stream_abandoned_marks_aborted(tmp_path):
+    """消费方提前关掉流(浏览器断开 SSE → GeneratorExit)必须落 aborted
+    终态,不得永久卡 running。2026-09-26 实战教训;aborted 而非 failed——
+    取消不是业务失败,不能虚高 banner/stats 的失败率。"""
     import asyncio
     pytest.importorskip("langgraph")
     from afr import run_stream
@@ -298,5 +299,5 @@ def test_run_stream_abandoned_marks_failed(tmp_path):
     conn = sqlite3.connect(tmp_path / "a.db")
     row = conn.execute(
         "SELECT status, error FROM runs WHERE label='stream-abandon'").fetchone()
-    assert row is not None and row[0] == "failed" and "提前中断" in row[1]
+    assert row is not None and row[0] == "aborted" and "提前中断" in row[1]
     conn.close()

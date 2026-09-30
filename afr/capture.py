@@ -480,8 +480,10 @@ async def run_stream(graph, inputs, *, label: str = "", db_path=None,
             raise
         except BaseException as exc:  # GeneratorExit/CancelledError:消费方提前
             # 关闭了流(浏览器断开 SSE、任务取消)——同步落终态(此处不得 await),
-            # 否则 run 永久卡 running;随后原样重抛保持关闭协议
-            _mark(conn, rid, "failed", f"{exc.__class__.__name__}: 流被提前中断")
+            # 否则 run 永久卡 running;随后原样重抛保持关闭协议。状态用
+            # aborted 而非 failed:取消不是业务失败,banner/stats 只算 failed,
+            # 混在一起会让「停止生成」把服务失败率虚高到不可信
+            _mark(conn, rid, "aborted", f"{exc.__class__.__name__}: 流被提前中断")
             raise
     finally:
         conn.close()

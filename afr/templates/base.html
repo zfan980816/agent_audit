@@ -74,14 +74,14 @@
   .list-search .clr { color: var(--n-400); font-size: 12px; padding: 2px 4px; }
   .list-search .clr:hover { color: var(--red-600); text-decoration: none; }
   .list-head { position: sticky; top: 0; background: var(--n-25); z-index: 2;
-               display: grid; grid-template-columns: 26px 1fr 78px 56px 62px;
+               display: grid; grid-template-columns: 26px 1fr 78px 56px 62px 56px;
                gap: 6px; padding: 7px 14px; font-size: 11px; font-weight: 600;
                color: var(--n-500); border-bottom: 1px solid var(--n-200);
                letter-spacing: .02em; }
-  .row { display: grid; grid-template-columns: 26px 1fr 78px 56px 62px;
+  .row { display: grid; grid-template-columns: 26px 1fr 78px 56px 62px 56px;
          gap: 6px; padding: 8px 14px; cursor: pointer; align-items: center;
          border-bottom: 1px solid var(--n-100); transition: background .1s; }
-  .row:hover { background: var(--n-50); }
+  .row:hover { background: var(--n-100); }
   .row.sel { background: var(--brand-50);
              box-shadow: inset 3px 0 0 var(--brand-500); }
   .st { width: 16px; height: 16px; }
@@ -108,6 +108,8 @@
               border-color: #b9e6ca; }
   .badge.failed { background: var(--red-25); color: var(--red-600);
                   border-color: #fbd5d2; }
+  .badge.aborted { background: var(--n-100); color: var(--n-600);
+                   border-color: var(--n-300); }
   .badge.replaying { background: var(--yellow-50); color: var(--yellow-600);
                      border-color: #fedf89; }
   .tokchip { font-size: 11px; color: var(--n-500); background: var(--n-100);
@@ -180,6 +182,7 @@
   .bar.err { background: var(--red-600); }
   .bar-llm { background: var(--purple-500); }
   .wf-line:hover .bar-llm { background: var(--purple-600); }
+  .bar-tool { background: var(--orange-500); }
   .wf-kids { margin-left: 20px; border-left: 1px solid var(--n-200); }
   .wf-detail { padding: 6px 14px 10px 34px; background: var(--n-25);
                border-top: 1px solid var(--n-100); }
@@ -295,6 +298,7 @@
   <nav>
     <a href="/" class="{{ 'on' if not status }}">全部</a>
     <a href="/?status=failed" class="{{ 'on' if status == 'failed' }}">失败</a>
+    <a href="/?status=aborted" class="{{ 'on' if status == 'aborted' }}">已中断</a>
     <a href="/?status=ok" class="{{ 'on' if status == 'ok' }}">成功</a>
     <a href="/stats">概览</a>
   </nav>
@@ -311,5 +315,18 @@
 </div>
 {% endif %}
 <main>{% block body %}{% endblock %}</main>
+<script>
+  // 左列表选中态同步:htmx 点击行时只交换右侧 #detail,左侧 .sel
+  // 停在整页加载时的行上——这里手动挪到被点击的行,与 /run/{id}
+  // 整页渲染的 selected 语义保持一致
+  document.addEventListener("click", function (e) {
+    var row = e.target.closest("#list .row");
+    if (!row) return;
+    document.querySelectorAll("#list .row.sel").forEach(function (r) {
+      r.classList.remove("sel");
+    });
+    row.classList.add("sel");
+  });
+</script>
 </body>
 </html>

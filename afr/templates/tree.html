@@ -108,7 +108,7 @@
       <details class="wf-row sub">
         <summary class="wf-line" title="{{ c.name }}">
           <span class="wf-name">
-            <span class="caret"></span><span class="ic ic-llm">✦</span><span class="nm">{{ c.name }}</span>
+            <span class="caret"></span><span class="ic ic-llm">✦</span><span class="nm">{{ c.name }}{% if c.turn %} <span class="tag llm" title="节点内第 {{ c.turn }} 次调用该模型（ReAct 决策轮→总结轮）">#{{ c.turn }}</span>{% endif %}</span>
             {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
           </span>
           <span class="pv" {% if c.inp %}title="{{ c.inp }}"{% endif %}>{{ c.inp or "—" }}</span>
@@ -163,17 +163,19 @@
       <details class="wf-row sub">
         <summary class="wf-line" title="{{ c.name }}">
           <span class="wf-name">
-            <span class="caret"></span><span class="ic ic-tool">🔧</span><span class="nm">{{ c.name }}</span>
+            <span class="caret"></span><span class="ic ic-tool">🔧</span><span class="nm">{{ c.name }}{% if c.turn %} <span class="tag tool" title="节点内第 {{ c.turn }} 次调用该工具">#{{ c.turn }}</span>{% endif %}</span>
             {% if not c.ok %}<span class="badge failed">error</span>{% endif %}
           </span>
           <span class="pv" {% if c.inp %}title="{{ c.inp }}"{% endif %}>{{ c.inp or "—" }}</span>
           <span class="pv" {% if c.out %}title="{{ c.out }}"{% endif %}>{{ c.out or "—" }}</span>
           <span class="pv {{ 'err' if c.err }}" {% if c.err %}title="{{ c.err }}"{% endif %}>{{ c.err or "—" }}</span>
-          <span class="wf-start">—</span>
+          <span class="wf-start" title="工具调用无时长，位置为结束时刻">+{{ "%.1f"|format((c.off or 0) / 100 * (t.total or 0)) }}s</span>
           <span class="wf-lat">—</span>
           <span class="wf-tok">—</span>
           <span class="wf-tok">—</span>
-          <span class="track"></span>
+          <span class="track" title="{{ c.name }} · 结束时刻（工具无时长数据，标记起点）">
+            <span class="bar bar-tool" style="{% if c.off is not none %}left: {{ c.off }}%; width: 3px; min-width: 3px{% else %}display:none{% endif %}"></span>
+          </span>
         </summary>
         <div class="wf-detail">
           <div class="cards">
