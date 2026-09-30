@@ -7,3 +7,8 @@ build/
 .venv/
 *.db
 .env
+*.db-shm
+*.db-wal
+.plan_*.log
+bash.exe.stackdump
+.zcode/

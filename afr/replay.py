@@ -91,6 +91,9 @@ class ReplaySession:
         self.llm_hits = self.llm_misses = 0
         self.tool_hits = self.tool_misses = 0
         self.mismatches: list[str] = []
+        # distinct model names recorded in the source run — lazy, reused by
+        # every lookup_llm fallback (see lookup_llm for why they're needed)
+        self._src_models: list[str] | None = None
         self.conn.execute(
             "INSERT INTO runs(id, label, status, started_at, fork_of)"
             " VALUES(?,?,?,?,?)",
@@ -100,11 +103,28 @@ class ReplaySession:
 
     # -- lookups (source run only — D3) ----------------------------------
     def lookup_llm(self, model: str, messages_json: str):
-        key = llm_key(self.source, model, messages_json,
-                      canonical_json({"model": model}))
-        return self.conn.execute(
-            "SELECT * FROM llm_calls WHERE run_id=? AND key_hash=? LIMIT 1",
-            (self.source, key)).fetchone()
+        """Key candidates: the requested model name first, then every
+        distinct model recorded in the source run.
+
+        Capture computes key_hash AFTER overriding the model with
+        response_metadata's served name (glm-4.5, dated snapshots like
+        gpt-4o-2024-08-06), which can differ from the requested alias
+        this lookup is called with — without the fallback those rows
+        would never match and replay would fire a real call."""
+        if self._src_models is None:
+            rows = self.conn.execute(
+                "SELECT DISTINCT model FROM llm_calls WHERE run_id=?",
+                (self.source,)).fetchall()
+            self._src_models = [r["model"] for r in rows if r["model"]]
+        for m in [model] + [x for x in self._src_models if x != model]:
+            key = llm_key(self.source, m, messages_json,
+                          canonical_json({"model": m}))
+            row = self.conn.execute(
+                "SELECT * FROM llm_calls WHERE run_id=? AND key_hash=?"
+                " LIMIT 1", (self.source, key)).fetchone()
+            if row is not None:
+                return row
+        return None
 
     def lookup_tool(self, node: str, tool_name: str, args_json: str):
         ah = content_hash(args_json)

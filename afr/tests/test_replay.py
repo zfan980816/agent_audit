@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult, LLMResult
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
+from pydantic import ConfigDict
 
 from afr.capture import Recorder, canonical_json, connect
 from afr.replay import (ReplayReproducedError, ReplaySession, ToolMissDeclined,
@@ -37,21 +38,43 @@ class CountingFake(BaseChatModel):
             ChatGeneration(message=AIMessage("real:" + messages[-1].content))])
 
 
+class AliasFake(BaseChatModel):
+    """ChatOpenAI-shaped fake: model_name is the REQUESTED alias, the served
+    response echoes a different snapshot name via response_metadata."""
+    model_config = ConfigDict(protected_namespaces=())  # 'model_name' field
+
+    model_name: str = "gpt-4o"
+    n_real_calls: ClassVar[int] = 0
+    SERVED: ClassVar[str] = "gpt-4o-2024-08-06"
+
+    @property
+    def _llm_type(self):
+        return "alias"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        type(self).n_real_calls += 1
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(
+            "real:" + messages[-1].content,
+            response_metadata={"model_name": self.SERVED}))])
+
+
 @tool
 def echo(query: str) -> str:
     """Echo the query."""
     return "echo:" + query
 
 
-def _capture_llm(conn, run_id, human_text, reply, kind="ok"):
+def _capture_llm(conn, run_id, human_text, reply, kind="ok", resp_meta=None):
     """Fabricate a captured LLM call exactly as Recorder would store it."""
     handler = Recorder(conn, run_id)
     handler.on_chat_model_start({"id": [MODEL_NAME]},
                                 [[HumanMessage(content=human_text)]],
                                 run_id="cap", metadata={})
+    msg = AIMessage(reply, response_metadata=resp_meta) if resp_meta \
+        else AIMessage(reply)
     if kind == "ok":
         handler.on_llm_end(LLMResult(generations=[[
-            ChatGeneration(message=AIMessage(reply))]]), run_id="cap")
+            ChatGeneration(message=msg)]]), run_id="cap")
     else:
         handler.on_llm_error(ValueError(reply), run_id="cap")
 
@@ -74,6 +97,25 @@ def test_hit_zero_real_calls(tmp_path):
     assert result.content == "cached-answer"
     assert tel["llm_hits"] == 1 and tel["llm_misses"] == 0
     assert tel["hit_rate"] == 1.0
+
+
+def test_hit_when_served_model_differs_from_alias(tmp_path):
+    """capture 的 key 在 response_metadata 覆盖之后计算(服务端实际型号,
+    如 gpt-4o-2024-08-06),重放按请求别名(gpt-4o)查找——必须仍能命中,
+    否则本应走缓存的调用会触发真实执行。"""
+    AliasFake.n_real_calls = 0
+    db = tmp_path / "t.db"
+    conn = connect(db)
+    _capture_llm(conn, "src", "hi", "cached-answer",
+                 resp_meta={"model_name": AliasFake.SERVED})
+    conn.close()
+
+    chain = ChatPromptTemplate.from_messages([("human", "{q}")]) | AliasFake()
+    result, tel = replay(chain, {"q": "hi"}, source_run_id="src",
+                         db_path=db, assume_yes=True)
+    assert AliasFake.n_real_calls == 0  # 缓存命中,零真实调用
+    assert result.content == "cached-answer"
+    assert tel["llm_hits"] == 1 and tel["llm_misses"] == 0
 
 
 def test_miss_real_call_and_fork_written(tmp_path):
