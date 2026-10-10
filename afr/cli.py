@@ -316,6 +316,13 @@ def _trace_tree(conn, run_id: str):
     stream.sort(key=lambda x: (x[0], x[1]))
 
     nodes, cur, by_name = [], None, {}
+    if not any(ev["kind"] == "node_start" for ev in events) and \
+            (llm_rows or tool_rows):
+        # 无 LangGraph 回退:纯 LangChain 链没有 node_start 挂载点,合成一个
+        # 根节点承载全部 LLM/工具调用——数据本来就在库里,详情页不能空白
+        cur = {"node": "调用序列", "ts": t0 or 0.0, "inputs": None,
+               "children": [], "outputs": None}
+        nodes.append(cur)
     for _, kind, item in stream:
         if "node" in item and "ts" in item:
             cur = item

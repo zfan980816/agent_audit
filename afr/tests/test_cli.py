@@ -47,6 +47,36 @@ def test_aborted_runs_not_counted_as_failures(tmp_path):
     assert 'sub">#ab' in flt.text and 'sub">#fa' not in flt.text
 
 
+def test_tree_falls_back_to_flat_calls_without_langgraph(tmp_path):
+    """纯 LangChain 链(无 node_start 事件)的详情页不能空白:LLM/工具调用
+    平铺成调用级时间轴——数据在库里,只是没有节点挂载点(合成根节点承载)。"""
+    db = tmp_path / "t.db"
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO runs(id,label,status,started_at) VALUES(?,?,?,?)",
+        ("nl", "t", "ok", "2026-09-25T00:00:00"))
+    conn.execute(
+        "INSERT INTO llm_calls(run_id,seq,node,model,key_hash,request_json,"
+        " response_json,kind,tokens,dur) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        ("nl", 1, "-", "glm-4.5", "k", '{"type":"human","content":"hi"}',
+         '{"type":"ai","content":"ok"}', "ok", 10, 0.2))
+    conn.execute(
+        "INSERT INTO tool_calls(run_id,seq,node,tool_name,args_hash,"
+        " args_json,result_json,kind) VALUES(?,?,?,?,?,?,?,?)",
+        ("nl", 2, "-", "echo", "a", "{}", '"ok"', "ok"))
+    for seq, kind in ((1, "llm"), (2, "tool")):  # Recorder 总会写这两条事件
+        conn.execute(
+            "INSERT INTO events(run_id,seq,ts,kind,node,payload)"
+            " VALUES(?,?,?,?,?,?)", ("nl", seq, 0.1 * seq, kind, "-", "{}"))
+    conn.commit()
+    conn.close()
+    frag = TestClient(create_app(db)).get("/run/nl/tree")
+    assert frag.status_code == 200
+    assert "调用序列" in frag.text          # 合成根节点
+    assert "glm-4.5" in frag.text           # LLM 调用可见
+    assert "echo" in frag.text              # 工具调用可见
+
+
 def test_run_detail_page(tmp_path):
     db = tmp_path / "t.db"
     _seed(db, [("fa", "failed", {"sources": []})])
