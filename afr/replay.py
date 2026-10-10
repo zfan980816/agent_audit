@@ -94,6 +94,12 @@ class ReplaySession:
         # distinct model names recorded in the source run — lazy, reused by
         # every lookup_llm fallback (see lookup_llm for why they're needed)
         self._src_models: list[str] | None = None
+        # fork 行也受 (run_id, seq) 唯一索引约束,seq 必须单调不重复
+        self._fork_seq = 0
+
+    def _next_fork_seq(self) -> int:
+        self._fork_seq += 1
+        return self._fork_seq
         self.conn.execute(
             "INSERT INTO runs(id, label, status, started_at, fork_of)"
             " VALUES(?,?,?,?,?)",
@@ -139,7 +145,7 @@ class ReplaySession:
             "INSERT INTO llm_calls(run_id, seq, node, model, key_hash,"
             " request_json, response_json, kind, tokens)"
             " VALUES(?,?,?,?,?,?,?,?,?)",
-            (self.fork_id, self.llm_hits + self.llm_misses + 1, node, model,
+            (self.fork_id, self._next_fork_seq(), node, model,
              llm_key(self.fork_id, model, messages_json,
                      canonical_json({"model": model})),
              messages_json, response_json, kind, None))
@@ -149,8 +155,8 @@ class ReplaySession:
         self.conn.execute(
             "INSERT INTO tool_calls(run_id, seq, node, tool_name, args_hash,"
             " args_json, result_json, kind) VALUES(?,?,?,?,?,?,?,?)",
-            (self.fork_id, 0, node, tool_name, content_hash(args_json),
-             args_json, result_json, kind))
+            (self.fork_id, self._next_fork_seq(), node, tool_name,
+             content_hash(args_json), args_json, result_json, kind))
         self.conn.commit()
 
     # -- telemetry (D5: raw facts only, no threshold judgement) -------------
@@ -230,18 +236,41 @@ def _patched(session: ReplaySession):
         BaseTool.invoke = orig_tool
 
 
-def replay(graph, inputs, *, source_run_id: str, db_path=None, db_url=None,
-           assume_yes: bool = False):
+def _source_inputs(conn: db.DB, source_run_id: str) -> dict:
+    """The entry state captured at the source run's first node.
+
+    确定性重放的起点是源 run 的真实入口 state——否则重放从第 0 步就与
+    源 run 分叉,只在手工喂同样 inputs 时碰巧可用。没有 node_start
+    (纯 LangChain 链)时返回空 dict,行为与旧版一致。
+    """
+    row = conn.execute(
+        "SELECT payload FROM events WHERE run_id=? AND kind='node_start'"
+        " ORDER BY seq LIMIT 1", (source_run_id,)).fetchone()
+    if row is None:
+        return {}
+    try:
+        return json.loads(row["payload"]).get("inputs") or {}
+    except Exception:
+        return {}
+
+
+def replay(graph, inputs=None, *, source_run_id: str, db_path=None,
+           db_url=None, assume_yes: bool = False):
     """Deterministically replay a captured run against (possibly edited) code.
 
     Returns (result, telemetry). LLM/tool hits come from the source run's
     capture; misses either ask consent (tools) or execute for real (LLM),
-    and all new responses land in the fork session.
+    and all new responses land in the fork session. inputs=None (the
+    default, and what `rec replay` uses) starts from the source run's own
+    captured entry state; pass inputs explicitly to replay with different
+    starting data.
     """
     from .capture import connect
 
     conn = connect(db_path, db_url=db_url)
     try:
+        if inputs is None:
+            inputs = _source_inputs(conn, source_run_id)
         session = ReplaySession(conn, source_run_id, assume_yes=assume_yes)
         with _patched(session):
             try:

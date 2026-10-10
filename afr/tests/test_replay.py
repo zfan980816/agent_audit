@@ -217,3 +217,52 @@ def test_tool_miss_consent_executes_and_records(tmp_path, monkeypatch):
         (tel["fork_run"],)).fetchone()
     assert "echo:y" in fork["result_json"]
     conn.close()
+
+
+def test_replay_restores_source_entry_state(tmp_path):
+    """inputs 缺省时,重放从源 run 捕获的首个 node_start 入口 state 起跑,
+    而不是空 dict——否则重放从第 0 步就与源 run 分叉,「确定性重放」对
+    真实生产 run 不成立。"""
+    db = tmp_path / "t.db"
+    conn = connect(db)
+    conn.execute(
+        "INSERT INTO runs(id, label, status, started_at) VALUES(?,?,?,?)",
+        ("src", "t", "ok", "2026-09-25T00:00:00"))
+    conn.execute(
+        "INSERT INTO events(run_id, seq, ts, kind, node, payload)"
+        " VALUES(?,?,?,?,?,?)",
+        ("src", 1, 0.0, "node_start", "researcher",
+         canonical_json({"inputs": {"topic": "多智能体", "sources": ["u1"]}})))
+    conn.commit()
+    conn.close()
+
+    class ProbeGraph:
+        def __init__(self):
+            self.seen = "<untouched>"
+
+        def invoke(self, inputs, config=None):
+            self.seen = inputs
+            return {"ok": True}
+
+    probe = ProbeGraph()
+    result, tel = replay(probe, source_run_id="src", db_path=db,
+                         assume_yes=True)
+    assert probe.seen == {"topic": "多智能体", "sources": ["u1"]}
+    assert result == {"ok": True}
+
+
+def test_multiple_tool_misses_get_unique_fork_seqs(tmp_path, monkeypatch):
+    """fork 行也受 (run_id, seq) 唯一索引约束:同一 fork 里多次工具未命中
+    必须各拿各的 seq,第二次写入不得撞唯一约束。"""
+    db = tmp_path / "t.db"
+    conn = connect(db)
+    conn.close()
+
+    session = ReplaySession(connect(db), "src", assume_yes=True)
+    session.record_tool("n", "echo", canonical_json({"q": "1"}), '"1"', "ok")
+    session.record_tool("n", "echo", canonical_json({"q": "2"}), '"2"', "ok")
+    rows = session.conn.execute(
+        "SELECT seq FROM tool_calls WHERE run_id=? ORDER BY seq",
+        (session.fork_id,)).fetchall()
+    assert [r["seq"] for r in rows] == [1, 2]
+    session.conn.close()

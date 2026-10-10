@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 
 from .capture import DEFAULT_DB, connect
@@ -87,14 +87,23 @@ def _latency(started: str | None, finished: str | None):
         return None
 
 
+def _like_escape(s: str) -> str:
+    """User search text -> LIKE literal: % _ \\ 失去通配符含义(参数化已挡
+    注入,这里修的是匹配语义——搜「100%」就该匹配字面 100%)。"""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _run_rows(conn, status: str | None = None, q: str | None = None):
     cond, args = [], []
     if status:
         cond.append("r.status = ?")
         args.append(status)
     if q:
-        cond.append("(r.label LIKE ? OR r.id LIKE ?)")
-        args += [f"%{q}%", f"%{q}%"]
+        # ESCAPE '\' 的反斜杠字面量在三后端语义一致:sqlite 不处理 \ 转义、
+        # mysql/dm 里 '\\' 即单个反斜杠
+        like = f"%{_like_escape(q)}%"
+        cond.append("(r.label LIKE ? ESCAPE '\\' OR r.id LIKE ? ESCAPE '\\')")
+        args += [like, like]
     where = ("WHERE " + " AND ".join(cond)) if cond else ""
     rows = [dict(r) for r in
             conn.execute(_LIST_SQL.format(where=where), tuple(args)).fetchall()]
@@ -599,6 +608,12 @@ def create_app(db_url: str) -> FastAPI:
     app = FastAPI(title="Agent Flight Recorder", docs_url=None, redoc_url=None)
     keeper = db_mod.ConnKeeper(db_url)  # survives server-side idle drops
     shown_db = mask_password(db_url)
+    htmx_path = Path(__file__).parent / "templates" / "htmx.min.js"
+
+    @app.get("/static/htmx.min.js", include_in_schema=False)
+    def htmx_js():
+        # 本地 vendored htmx:内网/离线部署(集中库场景)交互不依赖公网 CDN
+        return FileResponse(htmx_path, media_type="application/javascript")
 
     @app.get("/", response_class=HTMLResponse)
     def traces_page(request: Request, status: str | None = None,
@@ -741,7 +756,8 @@ def main(argv=None) -> int:
         build = getattr(importlib.import_module(mod_name), func_name)
         from .replay import replay as do_replay
         graph = build()
-        _, tel = do_replay(graph, {}, source_run_id=args.run_id,
+        # inputs 缺省 = 从源 run 自己捕获的入口 state 起跑(确定性重放)
+        _, tel = do_replay(graph, source_run_id=args.run_id,
                            db_url=url, assume_yes=args.yes)
         print(f"重放完成，fork run = {tel['fork_run']}")
         return 0
