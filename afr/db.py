@@ -233,8 +233,32 @@ _MIGRATIONS = [
 ]
 
 
+# (run_id, seq) 唯一约束:让「已提交但未收到确认」「回灌重试/并发回灌」造成的
+# 重复写入在数据库层变成无害 no-op(配合 _flush_run 的 IGNORE 插入),而不是
+# 静默重复行。旧库若已存在重复行,唯一索引建不起来——降级并在 stderr 提示一次。
+_UNIQUE_INDEXES = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_ev_run_seq ON events(run_id, seq)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_run_seq ON llm_calls(run_id, seq)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_run_seq ON tool_calls(run_id, seq)",
+)
+# mysql / dm 同一套约束(IF NOT EXISTS 非通用,由探测循环自己容忍"已存在")
+_UNIQUE_INDEXES_SERVER = tuple(
+    ddl.replace(" IF NOT EXISTS", "") for ddl in _UNIQUE_INDEXES
+)
+_UNIQUE_INDEX_WARNED = False
+
+
 def _ensure_schema_sqlite(conn: sqlite3.Connection):
+    global _UNIQUE_INDEX_WARNED
     conn.executescript(SCHEMA_SQLITE)
+    for ddl in _UNIQUE_INDEXES:
+        try:
+            conn.execute(ddl)
+        except sqlite3.DatabaseError:
+            if not _UNIQUE_INDEX_WARNED:
+                print("[afr] 警告:库中已存在重复行，唯一索引未建立，"
+                      "回灌去重退化为尽力而为", file=sys.stderr)
+                _UNIQUE_INDEX_WARNED = True
     for _, _, ddl in _MIGRATIONS:  # same try/except as the old capture code
         try:
             conn.execute(ddl.format(json_type="TEXT"))
@@ -347,12 +371,19 @@ class FailoverConn:
     - every write goes to the primary first; the moment one fails, the
       not-yet-confirmed statements are replayed into BUFFER_DB (with a
       reconstructed run row) and all further writes land there;
+    - one RLock serializes execute/commit/close: LangGraph parallel branches
+      hit one run's Recorder from several threads, and the
+      check-then-journal-then-send sequence must be atomic or a concurrent
+      spill can swallow a statement (lost) or double-write it (the dup half
+      is now also caught by the unique indexes at flush time);
     - transient lock contention (sqlite busy / MySQL 1205/1213) is retried
       first — it is not an outage, and spilling here would misroute the
       run when the buffer later flushes;
     - the journal only ever holds the current unconfirmed batch (the
       recorder commits after every statement), so replaying it can never
-      duplicate rows already committed on the primary;
+      duplicate rows already committed on the primary — and the one
+      ambiguity a journal cannot see (commit succeeded but the ack was
+      lost) is absorbed by the unique indexes when the buffer flushes;
     - buffered rows are tagged with the db_url they belong to: a flush
       only ever returns runs to THEIR database, never to whichever
       process happens to recover first;
@@ -370,61 +401,65 @@ class FailoverConn:
         self._buffer: DB | None = None
         self._failed = primary is None
         self._journal: list[tuple[str, tuple]] = []
+        self._lock = threading.RLock()   # execute/commit/close/_spill 串行化
 
     def execute(self, sql, params=()):
-        if self._failed:
-            if self._buffer is None:
-                self._spill()
-            cur = self._buffer.execute(sql, params)
-            self._buffer.commit()
-            return cur
-        self._journal.append((sql, tuple(params)))
-        try:
-            return self._primary.execute(sql, params)
-        except Exception as exc:
-            ok, res = _retry_locks(
-                lambda: self._primary.execute(sql, params), exc)
-            if ok:
-                return res
-            self._failed = True
-            self._spill()  # replays the journal, including this statement
-            return _EmptyCursor()
+        with self._lock:
+            if self._failed:
+                if self._buffer is None:
+                    self._spill()
+                cur = self._buffer.execute(sql, params)
+                self._buffer.commit()
+                return cur
+            self._journal.append((sql, tuple(params)))
+            try:
+                return self._primary.execute(sql, params)
+            except Exception as exc:
+                ok, res = _retry_locks(
+                    lambda: self._primary.execute(sql, params), exc)
+                if ok:
+                    return res
+                self._failed = True
+                self._spill()  # replays the journal, including this statement
+                return _EmptyCursor()
 
     def commit(self):
-        if self._failed:
-            self._buffer.commit()
-            return
-        try:
-            self._primary.commit()
-            self._journal.clear()
-        except Exception as exc:
-            ok, _ = _retry_locks(self._primary.commit, exc)
-            if ok:
-                self._journal.clear()
+        with self._lock:
+            if self._failed:
+                self._buffer.commit()
                 return
-            self._failed = True
-            self._spill()
-            self._buffer.commit()
+            try:
+                self._primary.commit()
+                self._journal.clear()
+            except Exception as exc:
+                ok, _ = _retry_locks(self._primary.commit, exc)
+                if ok:
+                    self._journal.clear()
+                    return
+                self._failed = True
+                self._spill()
+                self._buffer.commit()
 
     def close(self):
-        # Down-at-start runs insert their run row only AFTER _spill() ran,
-        # so the db_url tag inside _spill() found no row yet — tag it now
-        # (the IS NULL/'' guard keeps this idempotent with _spill's tag).
-        if self._buffer is not None:
-            try:
-                self._buffer.execute(
-                    "UPDATE runs SET db_url=? WHERE id=?"
-                    " AND (db_url IS NULL OR db_url='')",
-                    (self._db_url, self._rid))
-                self._buffer.commit()
-            except Exception:
-                pass
-        for c in (self._primary, self._buffer):
-            if c is not None:
+        with self._lock:
+            # Down-at-start runs insert their run row only AFTER _spill() ran,
+            # so the db_url tag inside _spill() found no row yet — tag it now
+            # (the IS NULL/'' guard keeps this idempotent with _spill's tag).
+            if self._buffer is not None:
                 try:
-                    c.close()
+                    self._buffer.execute(
+                        "UPDATE runs SET db_url=? WHERE id=?"
+                        " AND (db_url IS NULL OR db_url='')",
+                        (self._db_url, self._rid))
+                    self._buffer.commit()
                 except Exception:
                     pass
+            for c in (self._primary, self._buffer):
+                if c is not None:
+                    try:
+                        c.close()
+                    except Exception:
+                        pass
 
     def _spill(self):
         if self._buffer is None:
@@ -456,12 +491,15 @@ class FailoverConn:
 
 
 def flush_buffer(db_url: str) -> int:
-    """Move every buffered run into the primary DB; returns run count.
+    """Move every buffered run into the primary DB; returns moved run count.
 
     Raises when the primary is unreachable (callers retry). Each run moves
     inside one primary transaction, and buffer rows are deleted only after
-    that commit — a crash mid-flush leaves the buffer intact, never
-    half-lost and never duplicated.
+    that commit — a crash mid-flush leaves the buffer intact. Idempotency
+    against crashes/racing flushers comes from the (run_id, seq) unique
+    indexes + IGNORE inserts in _flush_run. A single bad run (e.g. an
+    oversized payload the primary rejects) is skipped so it can never block
+    the healthy runs behind it.
     """
     if not BUFFER_DB.exists():
         return 0
@@ -477,9 +515,14 @@ def flush_buffer(db_url: str) -> int:
             return 0
         primary = open(db_url)
         try:
+            moved = 0
             for rid in rids:
-                _flush_run(buf, primary, rid)
-            return len(rids)
+                try:
+                    _flush_run(buf, primary, rid)
+                    moved += 1
+                except Exception:
+                    continue  # poison run must not block the healthy ones
+            return moved
         finally:
             primary.close()
     finally:
@@ -488,6 +531,8 @@ def flush_buffer(db_url: str) -> int:
 
 def _flush_run(buf: DB, primary: DB, rid: str):
     row = buf.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+    if row is None:
+        return  # 另一个进程刚把这个 run 灌完并清了缓冲
     vals = [row[c] for c in _RUNS_COLS]
     if primary.execute("SELECT id FROM runs WHERE id=?", (rid,)).fetchone():
         primary.execute(
@@ -503,9 +548,13 @@ def _flush_run(buf: DB, primary: DB, rid: str):
             f"SELECT {','.join(cols)} FROM {table} WHERE run_id=?",
             (rid,)).fetchall()
         ph = ",".join("?" * len(cols))
+        # IGNORE 插入 + (run_id, seq) 唯一索引 = 幂等:「已提交但未收到确认」
+        # 的 journal 重放、flush 中途崩溃后的重试、多进程并发回灌,第二次
+        # 写同一行都是无害 no-op。dm 走 MySQL 兼容模式,支持 INSERT IGNORE
+        ignore = " OR IGNORE" if primary.dialect.name == "sqlite" else " IGNORE"
         for r in rows:
             primary.execute(
-                f"INSERT INTO {table}({','.join(cols)}) VALUES({ph})",
+                f"INSERT{ignore} INTO {table}({','.join(cols)}) VALUES({ph})",
                 tuple(r[c] for c in cols))
     primary.commit()
     for table in _TABLE_COLS:  # success → clear this run from the buffer
@@ -537,7 +586,7 @@ def _flush_loop(db_url: str):
             if n:
                 print(f"[afr] 数据库已恢复，缓冲数据已回灌 {n} 个 run",
                       file=sys.stderr)
-            if n == 0:  # buffer empty (or file gone) — job done
+            if buffer_backlog() == 0:  # 缓冲真正清空才算完工(坏 run 不退出)
                 return
         except Exception:
             continue  # primary still down; keep retrying
@@ -817,6 +866,18 @@ def _ensure_schema_probe(conn: DB, json_type: str):
         except Exception as exc:
             if not any(s in str(exc).lower() for s in _ALREADY_EXISTS):
                 raise DatabaseError(f"建索引失败: {exc}") from exc
+    for ddl in _UNIQUE_INDEXES_SERVER:
+        try:
+            conn.execute(ddl)
+            conn.commit()
+        except Exception as exc:
+            # 容忍两类失败:索引已存在(并发首连),以及旧表已有重复行导致
+            # 唯一约束建不起来(MySQL 1061/1062 都带 "duplicate" 字样)——
+            # 后者与 sqlite 同样降级为尽力而为
+            msg = str(exc).lower()
+            if not any(s in msg for s in _ALREADY_EXISTS) \
+                    and "duplicate" not in msg:
+                raise DatabaseError(f"建唯一索引失败: {exc}") from exc
     for table, col, ddl in _MIGRATIONS:
         if not _probe_ok(conn, f"SELECT {col} FROM {table} LIMIT 1"):
             try:

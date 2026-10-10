@@ -188,3 +188,23 @@ def test_sql_strings_have_no_literal_qmark_or_bare_percent():
             if "%" in _QUOTED.sub("", inner):
                 offenders.append(f"{path.name}: 引号外裸 % -> {lit[:60]}")
     assert not offenders, f"SQL 卫生违规（改为参数绑定）: {offenders}"
+
+
+# -- (run_id, seq) 唯一约束:回灌幂等的兜底 -----------------------------------
+def test_duplicate_run_seq_rejected_by_unique_index(tmp_path):
+    """重复写入必须被数据库层拒绝——「已提交未确认重放」「并发回灌」「flush
+    崩溃重试」造成的第二次写同一行,靠它变成无害 no-op(README 承诺的
+    「不产生重复行」由此成立)。"""
+    import sqlite3
+
+    conn = db.open(str(tmp_path / "u.db"))
+    try:
+        for table in ("events", "llm_calls", "tool_calls"):
+            conn.execute(f"INSERT INTO {table}(run_id, seq) VALUES(?,?)",
+                         ("r", 1))
+            conn.commit()
+            with pytest.raises(sqlite3.DatabaseError):
+                conn.execute(f"INSERT INTO {table}(run_id, seq) VALUES(?,?)",
+                             ("r", 1))
+    finally:
+        conn.close()

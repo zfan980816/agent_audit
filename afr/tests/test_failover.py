@@ -268,3 +268,70 @@ def test_flush_buffer_accepts_bare_path(tmp_path, monkeypatch):
     buf = db.open_buffer()
     assert buf.execute("SELECT COUNT(*) c FROM runs").fetchone()["c"] == 0
     buf.close()
+
+
+def test_flush_is_idempotent_after_crash_window(tmp_path, monkeypatch):
+    """主库 commit 后、缓冲清除前崩溃 → 下次 flush 重灌同一批:唯一索引 +
+    IGNORE 插入必须吸收重复,同一 (run_id, seq) 只能有一行。"""
+    monkeypatch.setattr(db, "BUFFER_DB", tmp_path / "buffer.db")
+    url = _url(tmp_path / "primary.db")
+    buf = db.open_buffer()
+    buf.execute(
+        "INSERT INTO runs(id, label, status, started_at, db_url)"
+        " VALUES(?,?,?,?,?)", ("rid", "L", "ok", "t", url))
+    buf.execute(
+        "INSERT INTO events(run_id, seq, ts, kind, node, payload)"
+        " VALUES(?,?,?,?,?,?)", ("rid", 1, 0.1, "node_start", "n", "{}"))
+    buf.commit()
+    buf.close()
+    # 模拟崩溃窗口:主库已提交同一批,但缓冲未及清除
+    primary = db.open(url)
+    primary.execute(
+        "INSERT INTO runs(id, label, status, started_at) VALUES(?,?,?,?)",
+        ("rid", "L", "ok", "t"))
+    primary.execute(
+        "INSERT INTO events(run_id, seq, ts, kind, node, payload)"
+        " VALUES(?,?,?,?,?,?)", ("rid", 1, 0.1, "node_start", "n", "{}"))
+    primary.commit()
+    primary.close()
+
+    assert db.flush_buffer(url) == 1
+
+    primary = db.open(url)
+    count = primary.execute(
+        "SELECT COUNT(*) c FROM events WHERE run_id='rid'").fetchone()["c"]
+    primary.close()
+    assert count == 1
+    buf = db.open_buffer()
+    left = buf.execute("SELECT COUNT(*) c FROM runs").fetchone()["c"]
+    buf.close()
+    assert left == 0
+
+
+def test_poison_run_does_not_block_healthy_ones(tmp_path, monkeypatch):
+    """一个坏 run(如主库拒收的超长载荷)卡在回灌队列里,不能拖死排在
+    后面的健康 run——这是回灌管道的可用性底线。"""
+    monkeypatch.setattr(db, "BUFFER_DB", tmp_path / "buffer.db")
+    url = _url(tmp_path / "primary.db")
+    buf = db.open_buffer()
+    for rid, label in (("rbad", "bad"), ("rgood", "good")):
+        buf.execute(
+            "INSERT INTO runs(id, label, status, started_at, db_url)"
+            " VALUES(?,?,?,?,?)", (rid, label, "ok", "t", url))
+    buf.commit()
+    buf.close()
+
+    real_flush = db._flush_run
+
+    def flaky(buf_conn, primary, rid):
+        if rid == "rbad":  # 模拟主库拒收(超长行/约束冲突)
+            raise RuntimeError("poison run")
+        return real_flush(buf_conn, primary, rid)
+
+    monkeypatch.setattr(db, "_flush_run", flaky)
+    assert db.flush_buffer(url) == 1  # 只有 rgood 灌成功
+
+    primary = db.open(url)
+    labels = sorted(r["label"] for r in primary.execute("SELECT label FROM runs"))
+    primary.close()
+    assert labels == ["good"]
