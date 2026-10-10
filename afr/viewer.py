@@ -193,16 +193,65 @@ def _tool_cards(args_json: str | None, result_json: str | None, name: str):
     return {"args": args, "result": result, "name": name}
 
 
-def _trace_tree(conn, run_id: str):
-    """LangSmith-style span tree: nodes with nested llm/tool children.
-
-    Children attach to node OCCURRENCES by merged seq order (node_start
-    events, llm_calls and tool_calls share one seq counter), so ReAct
-    loops (agent→tools→agent) never duplicate calls across visits.
-    """
-    meta = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
-    if meta is None:
+def _load_json(js):
+    try:
+        return json.loads(js) if js else None
+    except Exception:
         return None
+
+
+def _flat_attrs(d, skip=()):
+    """[(k, v_str)] for the LangSmith-style attributes table."""
+    rows = []
+    for k, v in (d or {}).items():
+        if k in skip:
+            continue
+        if isinstance(v, (dict, list)):
+            v = json.dumps(v, ensure_ascii=False, default=str)
+        rows.append((k, str(v)))
+    return rows
+
+
+def _pv(obj, prefix="", limit=46):
+    """One-line Input/Output/Error cell preview (LangSmith trace table).
+
+    Dicts render as key=value pairs (days=3, destination=长沙 +17字段)
+    — a full JSON dump here is what makes the table unreadable."""
+    if isinstance(obj, dict) and not prefix:
+        parts = []
+        for i, (k, v) in enumerate(obj.items()):
+            if i >= 3:
+                parts.append(f"+{len(obj) - 3}字段")
+                break
+            if isinstance(v, (list, dict)):
+                v = f"[{len(v)}项]" if v else "[]"
+            parts.append(f"{k}={str(v)[:14]}")
+        s = ", ".join(parts)
+    else:
+        try:
+            s = obj if isinstance(obj, str) else json.dumps(
+                obj, ensure_ascii=False, default=str)
+        except Exception:
+            s = str(obj)
+    s = prefix + " ".join(str(s).split())
+    return s[:limit] + ("…" if len(s) > limit else "")
+
+
+def _pretty_obj(o):
+    if o is None or isinstance(o, str):
+        return o
+    try:
+        return json.dumps(o, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        return str(o)
+
+
+def _tree_clock(conn, run_id, meta):
+    """events + 时间基准:ev_ts 按序配对、t0/span、wall 总时长、gantt 满刻度。
+
+    wall 与列表列同源同算法(_latency),两处数字永远一致;gantt 刻度取
+    wall 与 span 的较大者——条形永不过冲,末事件与总时长之间的诚实空隙
+    以空轨道呈现。"""
     events = conn.execute(
         "SELECT seq, ts, kind, node, payload FROM events WHERE run_id=?"
         " ORDER BY seq", (run_id,)).fetchall()
@@ -212,29 +261,28 @@ def _trace_tree(conn, run_id: str):
              "tool": [ev["ts"] for ev in events if ev["kind"] == "tool"]}
     t0 = events[0]["ts"] if events else None
     span = max(0.0, events[-1]["ts"] - events[0]["ts"]) if len(events) > 1 else 0.0
-    # wall latency from the runs table — same source and same helper as the
-    # list column, so the two numbers can never disagree. The gantt scale is
-    # the larger of the two so bars never overshoot the track and the honest
-    # gap between last event and wall time stays visible as empty track.
     wall = _latency(meta["started_at"], meta["finished_at"])
     total = wall if wall is not None else span
-    gantt_total = max(total or 0.0, span)
+    return events, ev_ts, t0, span, total, max(total or 0.0, span)
 
+
+def _gantt_at(t0, gantt_total):
+    """生成 (offset%, width%) 计算器;ts=None 或零刻度 = 无条形。"""
     def _gantt(ts, dur):
-        """(offset%, width%) on the gantt timeline; None = no bar."""
         if ts is None or t0 is None or gantt_total <= 0:
             return None, (0.0 if dur else None)
         off = min(100.0, max(0.0, (ts - t0) / gantt_total * 100.0))
         wid = (min(100.0 - off, max(0.0, dur / gantt_total * 100.0))
                if dur else None)
         return round(off, 1), (round(wid, 1) if wid is not None else None)
+    return _gantt
 
-    stream = []
+
+def _tree_stream(conn, run_id, events, ev_ts, gantt):
+    """node_start/node_output 事件与 llm/tool 调用装配成一条 (seq, 类别, 项)
+    有序流。llm 事件的 ts 是调用结束时刻,条形起点按 dur 回推。"""
     prices = _prices()
-
-    def _cost(model, tokens):
-        return ((tokens or 0) / 1000.0) * _price_for(model, prices)
-
+    stream = []
     for ev in events:
         if ev["kind"] == "node_start":
             try:
@@ -256,49 +304,28 @@ def _trace_tree(conn, run_id: str):
         " tokens, dur, params_json, meta_json FROM llm_calls"
         " WHERE run_id=? ORDER BY seq", (run_id,)).fetchall()
     for i, r in enumerate(llm_rows):
-        # the llm event fires in on_llm_end, so its ts is the END of the
-        # call; subtract dur to get the true bar start
         ts = ev_ts["llm"][i] if i < len(ev_ts["llm"]) else None
         if ts is not None and r["dur"]:
             ts = ts - r["dur"]
-        off, wid = _gantt(ts, r["dur"])
-
-        def _load(js):
-            try:
-                return json.loads(js) if js else None
-            except Exception:
-                return None
-
-        def _flat(d, skip=()):
-            """[(k, v_str)] for the LangSmith-style attributes table."""
-            rows = []
-            for k, v in (d or {}).items():
-                if k in skip:
-                    continue
-                if isinstance(v, (dict, list)):
-                    v = json.dumps(v, ensure_ascii=False, default=str)
-                rows.append((k, str(v)))
-            return rows
-
-        params = _load(r["params_json"])
-        llm_meta = _load(r["meta_json"])
+        off, wid = gantt(ts, r["dur"])
+        params = _load_json(r["params_json"])
+        llm_meta = _load_json(r["meta_json"])
         attr_groups = []
-        prow = _flat(params, skip=("_type",))
+        prow = _flat_attrs(params, skip=("_type",))
         if prow:
             attr_groups.append({"name": "调用参数", "rows": prow})
-        mrow = _flat(llm_meta, skip=("token_usage",))
+        mrow = _flat_attrs(llm_meta, skip=("token_usage",))
         if mrow:
             attr_groups.append({"name": "返回元数据", "rows": mrow})
         usage = (llm_meta or {}).get("token_usage")
         if isinstance(usage, dict) and usage:
             attr_groups.append({"name": "Token 用量",
-                                "rows": _flat(usage)})
-
+                                "rows": _flat_attrs(usage)})
         stream.append((r["seq"], 1, {
             "type": "llm", "name": r["model"], "ok": r["kind"] == "ok",
             "tokens": r["tokens"], "dur": r["dur"], "ts": ts,
             "at": r["node"],
-            "cost": _cost(r["model"], r["tokens"]),
+            "cost": ((r["tokens"] or 0) / 1000.0) * _price_for(r["model"], prices),
             "attr_groups": attr_groups,
             "off": off, "wid": wid,
             "cards": _msg_cards(r["request_json"]),
@@ -310,7 +337,7 @@ def _trace_tree(conn, run_id: str):
         " FROM tool_calls WHERE run_id=? ORDER BY seq", (run_id,)).fetchall()
     for i, r in enumerate(tool_rows):
         ts = ev_ts["tool"][i] if i < len(ev_ts["tool"]) else None
-        off, wid = _gantt(ts, None)
+        off, wid = gantt(ts, None)
         stream.append((r["seq"], 1, {
             "type": "tool", "name": r["tool_name"], "ok": r["kind"] == "ok",
             "tokens": None, "dur": None, "ts": ts,
@@ -319,7 +346,12 @@ def _trace_tree(conn, run_id: str):
             "tc": _tool_cards(r["args_json"], r["result_json"],
                               r["tool_name"])}))
     stream.sort(key=lambda x: (x[0], x[1]))
+    return stream, llm_rows, tool_rows
 
+
+def _tree_nodes(stream, events, llm_rows, tool_rows, t0, gantt):
+    """把装配流挂成节点:node_output 回填、调用按 node 列归属、时长/汇总、
+    同名子行轮次编号、显示名追加实际调用的模型/工具。"""
     nodes, cur, by_name = [], None, {}
     if not any(ev["kind"] == "node_start" for ev in events) and \
             (llm_rows or tool_rows):
@@ -354,7 +386,7 @@ def _trace_tree(conn, run_id: str):
         n["tokens"] = sum(c.get("tokens") or 0 for c in n["children"])
         n["cost"] = sum(c.get("cost") or 0.0 for c in n["children"])
         n["slow"] = n["dur"] > 10.0
-        n["off"], n["wid"] = _gantt(n["ts"], n["dur"])
+        n["off"], n["wid"] = gantt(n["ts"], n["dur"])
         # 同名子行编号:ReAct 节点内同一模型的多次调用(决策轮→总结轮)
         # 行名完全一样,不编号无法分辨是第几次(c.turn 渲染为 #N 标签)
         cnt: dict[str, int] = {}
@@ -375,14 +407,11 @@ def _trace_tree(conn, run_id: str):
         n["disp"] = n["node"] + (" · " + "、".join(calls[:3]) +
                                  (f" 等{len(calls)}个" if len(calls) > 3
                                   else ""))
-    tokens = sum(n["tokens"] for n in nodes)
-    cost = sum(n["cost"] for n in nodes)
-    started = (meta["started_at"] or "").replace("T", " ")
-    models = [r[0] for r in conn.execute(
-        "SELECT DISTINCT model FROM llm_calls WHERE run_id=? AND model != ?"
-        " ORDER BY model", (run_id, "?"))]
-    # failure diagnosis: first child that errored (node + tool/llm + message)
-    first_error = None
+    return nodes
+
+
+def _first_error(nodes):
+    """失败诊断:第一个出错的子调用(节点 + 工具/模型 + 消息)。"""
     for n in nodes:
         for c in n["children"]:
             if c.get("ok", True):
@@ -392,51 +421,18 @@ def _trace_tree(conn, run_id: str):
                 msg = c["resp"]["content"]
             elif c["type"] == "tool":
                 msg = str((c.get("tc") or {}).get("result"))[:300]
-            first_error = {"node": n["node"], "name": c["name"], "msg": msg}
-            break
-        if first_error:
-            break
+            return {"node": n["node"], "name": c["name"], "msg": msg}
+    return None
 
-    def _pv(obj, prefix="", limit=46):
-        """One-line Input/Output/Error cell preview (LangSmith trace table).
 
-        Dicts render as key=value pairs (days=3, destination=长沙 +17字段)
-        — a full JSON dump here is what makes the table unreadable."""
-        if isinstance(obj, dict) and not prefix:
-            parts = []
-            for i, (k, v) in enumerate(obj.items()):
-                if i >= 3:
-                    parts.append(f"+{len(obj) - 3}字段")
-                    break
-                if isinstance(v, (list, dict)):
-                    v = f"[{len(v)}项]" if v else "[]"
-                parts.append(f"{k}={str(v)[:14]}")
-            s = ", ".join(parts)
-        else:
-            try:
-                s = obj if isinstance(obj, str) else json.dumps(
-                    obj, ensure_ascii=False, default=str)
-            except Exception:
-                s = str(obj)
-        s = prefix + " ".join(str(s).split())
-        return s[:limit] + ("…" if len(s) > limit else "")
-
+def _tree_previews(nodes, first_error):
+    """列表单元格的单行预览(_pv)+ 展开用的完整 pretty JSON。"""
     for n in nodes:
         n["inp"] = _pv(n["inputs"]) if n["inputs"] is not None else None
         n["out"] = _pv(n["outputs"]) if n["outputs"] is not None else None
         n["err"] = (_pv(first_error["msg"], limit=40)
                     if first_error and first_error["node"] == n["node"]
                     and first_error.get("msg") else None)
-
-        def _pretty_obj(o):
-            if o is None or isinstance(o, str):
-                return o
-            try:
-                return json.dumps(o, ensure_ascii=False, indent=2,
-                                  default=str)
-            except Exception:
-                return str(o)
-
         n["inputs_p"] = _pretty_obj(n["inputs"])
         n["outputs_p"] = _pretty_obj(n["outputs"])
         n["inputs_k"] = ([str(k) for k in n["inputs"]][:40]
@@ -456,9 +452,11 @@ def _trace_tree(conn, run_id: str):
                 res = (c.get("tc") or {}).get("result")
                 c["out"] = _pv(res) if res else None
                 c["err"] = _pv(res, limit=40) if not c["ok"] and res else None
-    # Fold repeated executions of the same node into ONE row: food_check
-    # running 3x in a retry loop is one logical step, not three rows each
-    # dumping the full state again. Each visit stays drillable per-exec.
+
+
+def _fold_execs(nodes):
+    """同名节点的多次执行折叠成一行:food_check 重试 3 次是一个逻辑步骤,
+    不该三行各甩一遍全量状态;每次执行保留在 execs 里可逐次下钻。"""
     folded, by_name = [], {}
     for n in nodes:
         f = by_name.get(n["node"])
@@ -486,10 +484,13 @@ def _trace_tree(conn, run_id: str):
         f["disp"] = f["node"] + (" · " + "、".join(calls[:3]) +
                                  (f" 等{len(calls)}个" if len(calls) > 3
                                   else ""))
+    return folded
 
-    # best diff counterpart: latest same-label run of the OPPOSITE status,
-    # falling back to any latest same-label run (LangSmith has no such
-    # one-click jump — this is our first-divergence workflow's front door)
+
+def _diff_pair(conn, meta, run_id):
+    """最佳 diff 对照:同 label 反状态最近一次,退而求其次同 label 任意最近。
+
+    (LangSmith 没有这种一键跳转——这是首分歧工作流的前门。)"""
     pair = None
     opposite = {"failed": "ok", "ok": "failed"}.get(meta["status"])
     # NULL-safe label match without sqlite's `IS ?` (mysql/dm don't accept
@@ -507,6 +508,33 @@ def _trace_tree(conn, run_id: str):
             " AND id != ? ORDER BY started_at DESC, id DESC LIMIT 1",
             (meta["label"], meta["label"], run_id)).fetchone()
         pair = r["id"] if r else None
+    return pair
+
+
+def _trace_tree(conn, run_id: str):
+    """LangSmith-style span tree: nodes with nested llm/tool children.
+
+    Children attach to node OCCURRENCES by merged seq order (node_start
+    events, llm_calls and tool_calls share one seq counter), so ReAct
+    loops (agent→tools→agent) never duplicate calls across visits.
+    """
+    meta = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+    if meta is None:
+        return None
+    events, ev_ts, t0, span, total, gantt_total = _tree_clock(conn, run_id, meta)
+    gantt = _gantt_at(t0, gantt_total)
+    stream, llm_rows, tool_rows = _tree_stream(conn, run_id, events, ev_ts, gantt)
+    nodes = _tree_nodes(stream, events, llm_rows, tool_rows, t0, gantt)
+    tokens = sum(n["tokens"] for n in nodes)
+    cost = sum(n["cost"] for n in nodes)
+    started = (meta["started_at"] or "").replace("T", " ")
+    models = [r[0] for r in conn.execute(
+        "SELECT DISTINCT model FROM llm_calls WHERE run_id=? AND model != ?"
+        " ORDER BY model", (run_id, "?"))]
+    first_error = _first_error(nodes)
+    _tree_previews(nodes, first_error)
+    folded = _fold_execs(nodes)
+    pair = _diff_pair(conn, meta, run_id)
     return {"meta": meta, "nodes": folded, "exec_total": len(nodes),
             "total": total, "tokens": tokens,
             "cost": cost, "models": models, "first_error": first_error,
