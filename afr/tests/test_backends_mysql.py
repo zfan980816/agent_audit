@@ -51,7 +51,7 @@ def test_mysql_schema_auto_created_and_roundtrip():
 
 
 def test_mysql_viewer_queries():
-    from afr.cli import _run_rows, _trace_tree
+    from afr.viewer import _run_rows, _trace_tree
     conn = _connect()
     rid = uuid.uuid4().hex[:12]
     try:

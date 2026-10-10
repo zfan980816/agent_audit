@@ -174,7 +174,8 @@ def test_parallel_nodes_children_attributed(tmp_path):
     afr.run(g.compile(), {"q": "x"}, db_path=tmp_path / "p.db", label="par")
 
     import sqlite3
-    from afr.cli import _open_db, _trace_tree
+    from afr.cli import _open_db
+    from afr.viewer import _trace_tree
     rid = sqlite3.connect(tmp_path / "p.db").execute(
         "SELECT id FROM runs").fetchone()[0]
     tree = _trace_tree(_open_db(str(tmp_path / "p.db")), rid)
