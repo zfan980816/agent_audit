@@ -109,9 +109,9 @@ def test_concurrent_runs_both_recorded(tmp_path, monkeypatch):
     Under heavy machine load a statement can exhaust even the lock retries
     and spill to the buffer — the contract is every run EVENTUALLY lands
     (spill + flush is part of the pipeline), so drain before counting."""
-    from afr import db as afr_db
-    monkeypatch.setattr(afr_db, "BUFFER_DB", tmp_path / "buffer.db")
-    monkeypatch.setattr(afr_db, "start_flusher", lambda *a, **k: None)
+    from afr import buffer as afr_buffer
+    monkeypatch.setattr(afr_buffer, "BUFFER_DB", tmp_path / "buffer.db")
+    monkeypatch.setattr(afr_buffer, "start_flusher", lambda *a, **k: None)
     db = tmp_path / "t.db"
     g = RunnableLambda(lambda x: {"n": x["n"] + 1})
     results = []
@@ -131,7 +131,7 @@ def test_concurrent_runs_both_recorded(tmp_path, monkeypatch):
     assert not errs and len(results) == 4
     backlog = 1
     for _ in range(40):  # 排空也可能撞锁,有界重试(生产由 flusher 线程兜底)
-        backlog = afr_db.flush_buffer_best_effort(db)
+        backlog = afr_buffer.flush_buffer_best_effort(db)
         if not backlog:
             break
         time.sleep(0.25)
@@ -140,7 +140,7 @@ def test_concurrent_runs_both_recorded(tmp_path, monkeypatch):
     conn.close()
     buf_state = ""
     if backlog or got != 4:  # 失败现场:数据是还在缓冲,还是真丢了
-        buf = sqlite3.connect(afr_db.BUFFER_DB)
+        buf = sqlite3.connect(afr_buffer.BUFFER_DB)
         buf_state = f"; buffer runs={buf.execute('SELECT COUNT(*) FROM runs').fetchone()[0]}"
         buf.close()
     assert got == 4, f"主库 {got}/4, 缓冲积压 {backlog}{buf_state}"

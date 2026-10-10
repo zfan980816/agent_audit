@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 
+from . import buffer
 from . import db as db_mod
 from .db import mask_password, resolve_db_url
 from .diff import diff
@@ -651,7 +652,7 @@ def create_app(db_url: str) -> FastAPI:
         return _TEMPLATES.TemplateResponse(request, "traces.html", {
             "runs": rows, "db": shown_db, "status": status or "",
             "q": q or "", "banner_fails": banner,
-            "buffer_backlog": db_mod.buffer_backlog(),
+            "buffer_backlog": buffer.buffer_backlog(),
         })
 
     @app.get("/stats", response_class=HTMLResponse)

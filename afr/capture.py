@@ -20,6 +20,7 @@ import uuid
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from . import buffer
 from . import db
 
 DEFAULT_DB = db.DEFAULT_DB  # re-export: cli/__init__ import this
@@ -388,7 +389,7 @@ def _begin_run(label, db_path, db_url):
     outage leftovers, open a failover connection (primary=None = the db is
     down at start; writes spill to the local buffer)."""
     url = db.resolve_db_url(db_url or db_path)
-    backlog = db.flush_buffer_best_effort(url)  # recover outage leftovers
+    backlog = buffer.flush_buffer_best_effort(url)  # recover outage leftovers
     if backlog:
         print(f"[afr] 注意：{backlog} 个 run 仍在本地缓冲等待回灌"
               f"（主库不可达），恢复后自动写入", file=sys.stderr)
@@ -400,7 +401,7 @@ def _begin_run(label, db_path, db_url):
         primary = None
         print(f"[afr] 数据库不可达（{db.mask_password(url)}），"
               f"本次运行暂存本地缓冲，恢复后自动回灌", file=sys.stderr)
-    conn = db.FailoverConn(primary, rid, label, started, url)
+    conn = buffer.FailoverConn(primary, rid, label, started, url)
     return conn, rid, started
 
 
