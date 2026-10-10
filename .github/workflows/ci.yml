@@ -10,12 +10,27 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.13"]
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: afrtest
+          MYSQL_DATABASE: afr
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pafrtest"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+    env:
+      AFR_TEST_MYSQL_URL: mysql://root:afrtest@127.0.0.1:3306/afr
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e .[demo,dev]
+      - run: pip install -e .[demo,dev,mysql]
       - run: pytest afr/tests -q
 
   publish:

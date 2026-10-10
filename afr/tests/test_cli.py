@@ -182,3 +182,27 @@ def test_parallel_nodes_children_attributed(tmp_path):
             for n in tree["nodes"]}
     assert kids.get("transport") == ["llm"]  # 各归各,不串门
     assert kids.get("weather") == ["llm"]
+
+
+def test_search_escapes_like_wildcards(tmp_path):
+    """搜索「100%」按字面匹配,不当通配符(参数化挡注入,这里修匹配语义)。"""
+    db = tmp_path / "t.db"
+    conn = connect(db)
+    for rid, label in (("r1", "月度100X报告"), ("r2", "a_b测试"),
+                       ("r3", "aXb测试")):
+        conn.execute(
+            "INSERT INTO runs(id, label, status, started_at) VALUES(?,?,?,?)",
+            (rid, label, "ok", "2026-09-25T00:00:00"))
+    conn.commit()
+    conn.close()
+    client = TestClient(create_app(db))
+    assert 'sub">#r1' not in client.get("/", params={"q": "100%"}).text
+    r = client.get("/", params={"q": "a_b"})
+    assert 'sub">#r2' in r.text and 'sub">#r3' not in r.text
+
+
+def test_htmx_served_locally(tmp_path):
+    """htmx 本地 vendored:内网/离线部署详情页交互不依赖公网 CDN。"""
+    client = TestClient(create_app(tmp_path / "t.db"))
+    r = client.get("/static/htmx.min.js")
+    assert r.status_code == 200 and "htmx" in r.text[:400].lower()

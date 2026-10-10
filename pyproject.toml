@@ -29,4 +29,4 @@ rec = "afr.cli:main"
 include = ["afr*"]
 
 [tool.setuptools.package-data]
-afr = ["templates/*.html"]
+afr = ["templates/*.html", "templates/*.js"]
